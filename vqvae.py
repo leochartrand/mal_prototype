@@ -262,7 +262,8 @@ class VQ_VAE(nn.Module):
             recon_weight=0.1,
             entropy_weight=0.01,
             imsize=48,
-            decay=0.0):
+            decay=0.0,
+            ignore_background=False):
         super(VQ_VAE, self).__init__()
         self.imsize = imsize
         self.embedding_dim = embedding_dim
@@ -283,6 +284,7 @@ class VQ_VAE(nn.Module):
         self.commitment_cost = commitment_cost
         self.recon_weight = recon_weight
         self.entropy_weight = entropy_weight
+        self.ignore_background = ignore_background
 
         if decay > 0.0:
             self._vq_vae = VectorQuantizerEMA(num_embeddings,
@@ -290,7 +292,7 @@ class VQ_VAE(nn.Module):
                 commitment_cost, decay)
         else:
             self._vq_vae = VectorQuantizer(num_embeddings, self.embedding_dim,
-                commitment_cost, gaussion_prior=True)
+                commitment_cost)
 
         self._decoder = Decoder(self.embedding_dim,
             num_hiddens,
@@ -325,9 +327,12 @@ class VQ_VAE(nn.Module):
         vq_loss, quantized, perplexity, encoding_indices = self.quantize_image(inputs)
         recon = self.decode(quantized)
 
-        # Weight non-zero pixels more than black pixels
-        weights = (inputs > 0).float() * 2 + 1  
-        recon_error = F.mse_loss(recon * weights, inputs * weights) * self.recon_weight
+        if self.ignore_background:
+            # Weight non-zero pixels more than black pixels; for dot/block datasets
+            weights = (inputs > 0).float() * 1 + 1  
+            recon_error = F.mse_loss(recon * weights, inputs * weights) * self.recon_weight
+        else:
+            recon_error = F.mse_loss(recon, inputs) * self.recon_weight
 
         # Entropy loss to encourage usage of more embeddings
         entropy_loss = self.codebook_entropy(inputs, encoding_indices)
@@ -335,16 +340,22 @@ class VQ_VAE(nn.Module):
         return vq_loss, recon, perplexity, recon_error, quantized, encoding_indices, entropy_loss
 
     def codebook_entropy(self, inputs, encoding_indices):
+        """ 
+        Encourage the model to use more of the embeddings in the codebook 
+        by calculating the squared normalized entropy of the codebook usage.
+        This term penalizes low entropy (i.e., using only a few embeddings)
+        more than it forces high entropy (uniform usage of all embeddings).
+        """
+        # Codebook usage probabilities
         avg_probs = torch.zeros(self.num_embeddings, device=inputs.device)
         unique_indices, counts = torch.unique(encoding_indices, return_counts=True)
         avg_probs[unique_indices] = counts.float()
         avg_probs = avg_probs / torch.sum(avg_probs)
-        entropy = -torch.sum(avg_probs * torch.log(avg_probs + 1e-8))
 
-        # Get max possible entropy as a starting bias
-        # The better the entropy, the smaller the loss
+        # Normalized squared entropy
+        entropy = -torch.sum(avg_probs * torch.log(avg_probs + 1e-10))
         max_entropy = np.log(self.num_embeddings)
-        entropy_loss = (max_entropy - entropy) * self.entropy_weight
+        entropy_loss = (1 - (entropy / max_entropy))**2 * self.entropy_weight
         return entropy_loss
 
     def quantize_image(self, inputs):

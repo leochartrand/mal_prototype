@@ -89,17 +89,10 @@ def generate_color_data(n_samples=1000):
 
         move_to_idx = {"up": 0, "down": 1, "left": 2, "right": 3}
 
-        move_one_hot = np.zeros(4)
-        move_one_hot[move_to_idx[move]] = 1
-        color_one_hot = np.zeros(3)
-        color_one_hot[color2] = 1
-
-        command = np.concatenate([move_one_hot, color_one_hot])
-
         data.append((before, move_to_idx[move], color2, after))
     return data
 
-data = generate_color_data(4096)
+data = generate_color_data(10000)
 
 # #visualize a sample grid of after images
 import matplotlib.pyplot as plt

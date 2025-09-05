@@ -57,8 +57,8 @@ with torch.no_grad():
         before_img = torch.FloatTensor(x[0]).unsqueeze(0).unsqueeze(0).to(device)
         after_img = torch.FloatTensor(x[2]).unsqueeze(0).unsqueeze(0).to(device)
         
-        _, one, _, _, _, z0 = vqvae.compute_loss(before_img)
-        _, two, _, _, _, zt = vqvae.compute_loss(after_img)
+        _, _, _, _, _, z0 = vqvae.compute_loss(before_img)
+        _, _, _, _, _, zt = vqvae.compute_loss(after_img)
         
         initial_codes.append(z0.squeeze())
         target_codes.append(zt.squeeze())

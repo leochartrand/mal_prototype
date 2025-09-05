@@ -15,13 +15,14 @@ model = VQ_VAE(
     num_hiddens=128,          
     num_residual_layers=6,   # number of residual layers
     num_residual_hiddens=32, # channels in residual layers
-    num_embeddings=32,       # size of embedding codebook
-    embedding_dim=4,         # dimension of embedding vectors
+    num_embeddings=128,       # size of embedding codebook
+    embedding_dim=8,         # dimension of embedding vectors
     commitment_cost=0.5,    # beta in the VQ-VAE paper
     recon_weight=0.5,
     entropy_weight=0.1,
     decay=0.0,              # decay for EMA updates
-    imsize=8,                # input image size
+    imsize=8,                # input image size,
+    ignore_background=True,
 )
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -32,8 +33,8 @@ results_path = "./results/color_vqvae/"
 
 # Hyperparameters
 batch_size = 128
-num_epochs = 100
-lr = 1e-3
+num_epochs = 200
+lr = 5e-4
 weight_decay = 1e-5
 
 optimizer = optim.Adam(list(model.parameters()),
@@ -141,10 +142,7 @@ for epoch in pbar:
     avg_test_loss = total_test_loss / len(test_loader)
     test_losses.append(avg_test_loss)
 
-
-    # print(f"Loss: {loss.item():.6f} = VQ: {vq_loss.item():.6f} + {recon_loss_w} * Recon: {recon_error.item():.6f} + {entropy_loss_w} * Entropy: {entropy_loss.item():.6f}")
-    
-     # Print progress
+    # Print progress
     pbar.set_postfix({'Train Loss': avg_train_loss, 'Test Loss': avg_test_loss, 
                       'VQ Loss': avg_vq_loss, 'Recon Loss': avg_recon_loss, 
                       'Entropy Loss': avg_entropy_loss,
@@ -202,8 +200,6 @@ plt.title('Final Embedding Usage Distribution')
 plt.tight_layout()
 plt.savefig(results_path + 'embedding_utilization.png')
 plt.show()
-
-# model.load_state_dict(torch.load("./models/color_vqvae/vqvae_final.pt", weights_only=True))
 
 # Visualize some reconstructions and associated latent codes
 data_iter = iter(train_loader)

@@ -138,7 +138,7 @@ class GatedPixelCNN(nn.Module):
 
         return self.output_conv(x_h)
 
-    def generate(self, shape=(12, 12), batch_size=64, cond=None):
+    def generate(self, shape=(12, 12), batch_size=64, cond=None, temperature=1.0):
 
         param = next(self.parameters())
         x = torch.zeros(
@@ -148,30 +148,29 @@ class GatedPixelCNN(nn.Module):
         for i in range(shape[0]):
             for j in range(shape[1]):
                 logits = self.forward(x, cond) #might need to convert 0 to long
-                probs = F.softmax(logits[:, :, i, j], -1)
+                probs = F.softmax(logits[:, :, i, j] / temperature, -1)
                 x.data[:, i, j].copy_(
                     probs.multinomial(1).squeeze().data
                 )
         return x
     
-    def compute_loss(self, data, test=False):
+    def compute_loss(self, initial, commands, target, test=False):
 
         root_len = self.vqvae.root_len
         num_embeddings = self.vqvae.num_embeddings
 
         # Data shape: [batch, input stack, input size]
         # Split stacked data: [initial, command, target]
-        initial = data[:, 0, :].long()  # [batch, 4] 
-        commands = data[:, 1, :]  # [batch, 4]
-        target = data[:, 2, :].long().reshape(-1, root_len, root_len)  # [batch, 2, 2]
+        initial = initial.long()  
+        target = target.long().reshape(-1, root_len, root_len)  
         
         with torch.no_grad(): 
-            initial_cont = self.vqvae.discrete_to_cont(initial).reshape(data.shape[0], -1) # [batch, 4*2]
+            initial_cont = self.vqvae.discrete_to_cont(initial).reshape(initial.shape[0], -1) 
         # Combine conditioning
         cond = torch.cat([
-            initial_cont.detach(), # [batch, 8]
-            commands.detach() # [batch, 4]
-        ], dim=1) # [batch, 12]
+            initial_cont.detach(),
+            commands.detach() 
+        ], dim=1) 
 
         # Train PixelCNN with images
         logits = self.forward(target, cond)
