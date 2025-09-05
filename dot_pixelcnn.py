@@ -95,7 +95,7 @@ pixelcnn = GatedPixelCNN(
     input_dim=num_embeddings, 
     dim=32, 
     n_layers=n_layers, 
-    n_classes=total_cond_size, 
+    n_classes1=total_cond_size, 
     criterion=nn.CrossEntropyLoss().cuda()).to(device)
 optimizer = torch.optim.Adam(pixelcnn.parameters(), lr=lr)
 

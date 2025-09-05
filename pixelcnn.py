@@ -63,7 +63,7 @@ class GatedMaskedConv2d(nn.Module):
 
     def forward(self, x_v, x_h, h):
         if self.mask_type == 'A':
-            self.make_causal()
+            self.make_causal() # possibly wasteful computation, but minimal impact
 
         h = self.class_cond_embedding(h)
 
@@ -165,7 +165,8 @@ class GatedPixelCNN(nn.Module):
         target = target.long().reshape(-1, root_len, root_len)  
         
         with torch.no_grad(): 
-            initial_cont = self.vqvae.discrete_to_cont(initial).reshape(initial.shape[0], -1) 
+            initial_cont = self.vqvae.discrete_to_cont(initial).reshape(initial.shape[0], -1)
+            initial_cont = F.normalize(initial_cont, dim=1)
         # Combine conditioning
         cond = torch.cat([
             initial_cont.detach(),

@@ -42,8 +42,8 @@ results_path = "./results/color_pixelcnn/"
 batch_size = 256
 num_epochs = 200
 lr = 1e-4
-n_layers = 12
-dim = 128
+n_layers = 15
+dim = 192
 
 # Load and process data
 print("Loading and processing data...")
@@ -193,7 +193,7 @@ with torch.no_grad():
         
         # Prepare conditioning for PixelCNN
         with torch.no_grad(): 
-            initial_cont = vqvae.discrete_to_cont(viz_initial).reshape(1, -1) 
+            initial_cont = F.normalize(vqvae.discrete_to_cont(viz_initial).reshape(1, -1), dim=1)
         cond = torch.cat([initial_cont, viz_command], dim=1)  # [1, 12]
         
         # Generate next state
@@ -201,7 +201,7 @@ with torch.no_grad():
             shape=(vqvae.root_len, vqvae.root_len), 
             batch_size=1, 
             cond=cond,
-            temperature=0.4
+            temperature=0.3
         )  # [1, 2, 2]
         
         # Decode to images
@@ -223,7 +223,37 @@ with torch.no_grad():
             'command': move_names[move_idx] + " " + color_names[color_idx]
         })
 
-    fig, axes = plt.subplots(2, 8, figsize=(16, 4))
+    samples2 = []
+    for i in range(n_samples):
+        # Extract conditioning from test data
+        viz_initial = test_initial[8+i].long().unsqueeze(0).to(device)  # [1, 4]
+        viz_command = test_commands[8+i].unsqueeze(0).to(device)  # [1, 7] 
+        
+        # Prepare conditioning for PixelCNN
+        with torch.no_grad(): 
+            initial_cont = F.normalize(vqvae.discrete_to_cont(viz_initial).reshape(1, -1), dim=1)
+
+        dummy_command = torch.zeros_like(viz_command)
+        cond = torch.cat([initial_cont, viz_command], dim=1)  # [1, 39]
+        
+        # Generate next state
+        generated_codes = pixelcnn.generate(
+            shape=(vqvae.root_len, vqvae.root_len), 
+            batch_size=1, 
+            cond=cond,
+            temperature=0.3
+        )  # [1, 2, 2]
+        
+        # Decode to images
+        initial_img = vqvae.decode(viz_initial, cont=False).squeeze().permute(1,2,0).detach().cpu().numpy()
+        generated_img = vqvae.decode(generated_codes.reshape(1, -1), cont=False).squeeze().permute(1,2,0).detach().cpu().numpy()
+        
+        samples2.append({
+            'initial': initial_img.squeeze(),
+            'generated': generated_img.squeeze()
+        })
+
+    fig, axes = plt.subplots(4, 8, figsize=(16, 4))
     for i, sample in enumerate(samples):
         axes[0, i].imshow(sample['initial'])
         axes[0, i].set_title(f"Initial")
@@ -232,6 +262,15 @@ with torch.no_grad():
         axes[1, i].imshow(sample['generated']) 
         axes[1, i].set_title(f"→ {sample['command']}")
         axes[1, i].axis('off')
+
+    for i, sample in enumerate(samples2):
+        axes[2, i].imshow(sample['initial'])
+        axes[2, i].set_title(f"Initial")
+        axes[2, i].axis('off')
+        
+        axes[3, i].imshow(sample['generated']) 
+        axes[3, i].set_title(f"random")
+        axes[3, i].axis('off')
 
     plt.tight_layout()
     plt.savefig(results_path + 'generated_samples.png')

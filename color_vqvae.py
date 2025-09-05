@@ -44,7 +44,6 @@ optimizer = optim.Adam(list(model.parameters()),
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
     factor=0.5, patience=5, verbose=True)
 
-
 # Load and process data
 print("Loading and processing data...")
 with open("data/color_data.pkl", "rb") as f:
