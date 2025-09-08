@@ -7,7 +7,6 @@ import pytorch_util as ptu
 import torch.nn as nn
 import torch.nn.functional as F
 
-# 
 class Residual(nn.Module):
     def __init__(self, in_channels, num_hiddens, num_residual_hiddens):
         super(Residual, self).__init__()
@@ -330,14 +329,27 @@ class VQ_VAE(nn.Module):
         if self.ignore_background:
             # Weight non-zero pixels more than black pixels; for dot/block datasets
             weights = (inputs > 0).float() * 1 + 1  
-            recon_error = F.mse_loss(recon * weights, inputs * weights) * self.recon_weight
+            recon_loss = F.mse_loss(recon * weights, inputs * weights) * self.recon_weight
         else:
-            recon_error = F.mse_loss(recon, inputs) * self.recon_weight
+            recon_loss = F.mse_loss(recon, inputs) * self.recon_weight
 
         # Entropy loss to encourage usage of more embeddings
         entropy_loss = self.codebook_entropy(inputs, encoding_indices)
 
-        return vq_loss, recon, perplexity, recon_error, quantized, encoding_indices, entropy_loss
+        outputs = {
+            'reconstructions': recon,
+            'quantized': quantized,
+            'encoding_indices': encoding_indices,
+            'perplexity': perplexity
+        }
+
+        losses = {
+            'vq_loss': vq_loss,
+            'recon_loss': recon_loss,
+            'entropy_loss': entropy_loss,
+        }
+
+        return outputs, losses
 
     def codebook_entropy(self, inputs, encoding_indices):
         """ 

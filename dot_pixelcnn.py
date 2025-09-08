@@ -13,13 +13,16 @@ vqvae = VQ_VAE(
     input_channels=1,
     output_channels=1,
     num_hiddens=64,          
-    num_residual_layers=2,   # number of residual layers
+    num_residual_layers=2,  # number of residual layers
     num_residual_hiddens=8, # channels in residual layers
-    num_embeddings=16,       # size of embedding codebook
-    embedding_dim=2,         # dimension of embedding vectors
+    num_embeddings=16,      # size of embedding codebook
+    embedding_dim=2,        # dimension of embedding vectors
     commitment_cost=0.5,    # beta in the VQ-VAE paper
+    recon_weight=1,       # weight for reconstruction loss
+    entropy_weight=0.1,     # weight for entropy loss
     decay=0.0,              # decay for EMA updates
-    imsize=8,                # input image size
+    imsize=8,               # input image size
+    ignore_background=True, # activates weighting to ignore background (black) pixels in loss computation
 )
 vqvae.load_state_dict(torch.load("./models/dot_vqvae/vqvae_final.pt", weights_only=True))
 vqvae = vqvae.to(device)
@@ -57,8 +60,8 @@ with torch.no_grad():
         before_img = torch.FloatTensor(x[0]).unsqueeze(0).unsqueeze(0).to(device)
         after_img = torch.FloatTensor(x[2]).unsqueeze(0).unsqueeze(0).to(device)
         
-        _, _, _, _, _, z0 = vqvae.compute_loss(before_img)
-        _, _, _, _, _, zt = vqvae.compute_loss(after_img)
+        _, _, _, _, _, z0, _ = vqvae.compute_loss(before_img)
+        _, _, _, _, _, zt, _ = vqvae.compute_loss(after_img)
         
         initial_codes.append(z0.squeeze())
         target_codes.append(zt.squeeze())

@@ -1,0 +1,23 @@
+# Arguments for a VQ-VAE model trained on the val dataset.
+dataset: "val"
+dataset_path: "data/val_data.pkl"
+model_name: "VQ_VAE"
+model_save_name: "vqvae_final.pt"
+model_params:
+  input_channels: 3
+  output_channels: 3
+  num_hiddens: 512
+  num_residual_layers: 4
+  num_residual_hiddens: 64
+  num_embeddings: 1024
+  embedding_dim: 64
+  commitment_cost: 0.25
+  recon_weight: 0.5
+  entropy_weight: 0.05
+  decay: 0.99
+  imsize: 48
+  ignore_background: False
+batch_size: 128
+num_epochs: 300
+lr: 5e-5
+weight_decay: 1e-5

@@ -3,6 +3,7 @@ import pickle
 
 moves = ["up", "down", "left", "right"]
 colors = ["red", "green", "blue"]
+color_to_channel = {"red":0, "green":1, "blue":2}
 
 def move_2x2_dot(pos, move):
     """Move a 2x2 dot in the specified direction"""
@@ -36,16 +37,16 @@ def place_2x2_dot(grid, color, pos):
         return False  # Would go out of bounds
     
     # Check if any pixel in the 2x2 area is already occupied
-    for dr in range(2):
+    for dr in range(2): 
         for dc in range(2):
-            if grid[:, r+dr, c+dc].any():  # Check all channels for existing pixels
+            if grid[r+dr, c+dc, :].any():  # Check all channels for existing pixels
                 return False  # Overlap detected, don't place
     
     # No overlap, place the 2x2 dot
     for dr in range(2):
         for dc in range(2):
-            grid[color, r+dr, c+dc] = 1
-    
+            grid[r+dr, c+dc, color_to_channel[color]] = 1
+
     return True  # Successfully placed
 
 def generate_color_data(n_samples=1000):
@@ -57,13 +58,13 @@ def generate_color_data(n_samples=1000):
         while blocks_overlap(pos, pos2):
             pos2 = (np.random.randint(0, 7), np.random.randint(0, 7))
 
-        color = np.random.randint(0, 3) # Random color channel for first dot
-        color2 = np.random.randint(0, 3) # Random color channel for second dot
+        color = colors[np.random.randint(0, 3)] # Random color channel for first dot
+        color2 = colors[np.random.randint(0, 3)] # Random color channel for second dot
         while color2 == color:
-            color2 = np.random.randint(0, 3)
+            color2 = colors[np.random.randint(0, 3)]
 
         # RGB channels for two dots
-        before = np.zeros((3, 8, 8)) # [C, H, W]
+        before = np.zeros((8, 8, 3)) # [H, W, C]
 
         # Place before dots
         place_2x2_dot(before, color, pos)
@@ -83,13 +84,11 @@ def generate_color_data(n_samples=1000):
             
         move, new_pos2 = valid_moves[np.random.randint(len(valid_moves))]
         
-        after = np.zeros((3, 8, 8)) # [C, H, W]
+        after = np.zeros((8, 8, 3)) # [C, H, W]
         place_2x2_dot(after, color, pos)
         place_2x2_dot(after, color2, new_pos2)
 
-        move_to_idx = {"up": 0, "down": 1, "left": 2, "right": 3}
-
-        data.append((before, move_to_idx[move], color2, after))
+        data.append((before, after, move + " " + color2))
     return data
 
 data = generate_color_data(10000)
@@ -101,27 +100,26 @@ for i in range(grid_size):
     for j in range(grid_size):
         plt.subplot(grid_size, grid_size, i*grid_size + j + 1)
         plt.axis('off') # Turn off axiss for clarity      
-        sample = data[i*grid_size + j]  
-        #permute to HWC for visualization
-        sample = sample[3].transpose(1,2,0)
-        # show the sample
+        sample = data[i*grid_size + j][1] # put after image in subplot
         plt.imshow(sample)
 plt.show()
 
 # visualize a list of 5 samples with their commands
 # side by side with before and after
+# in new figure
+plt.figure(figsize=(10, 6))
 for i in range(5):
     plt.subplot(3, 5, i + 1)
     plt.title("Before")
     sample = data[i]
-    plt.imshow(sample[0].transpose(1,2,0))
+    plt.imshow(sample[0])
     plt.axis('off')
     plt.subplot(3, 5, i + 6)
-    plt.title(f"Cmd: {moves[sample[1]]}\nColor: {colors[sample[2]]}")
+    plt.title(f"Cmd: {sample[2]}")
     plt.axis('off')
     plt.subplot(3, 5, i + 11)
     plt.title("After")
-    plt.imshow(sample[3].transpose(1,2,0))
+    plt.imshow(sample[1])
     plt.axis('off')
 plt.show()
 

@@ -1,59 +1,43 @@
-from vqvae import VQ_VAE
 import torch
 import numpy as np
 import pickle
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from torch import optim
+import yaml
+import sys
+from model_utils import get_model
 
-# initialize VQVAE model and train on /data/color_data.pkl
-# generated from datagen.py
-print("Initializing VQVAE model and trainer...")
-model = VQ_VAE(
-    input_channels=3,
-    output_channels=3,
-    num_hiddens=128,          
-    num_residual_layers=6,   # number of residual layers
-    num_residual_hiddens=32, # channels in residual layers
-    num_embeddings=128,       # size of embedding codebook
-    embedding_dim=8,         # dimension of embedding vectors
-    commitment_cost=0.5,    # beta in the VQ-VAE paper
-    recon_weight=0.5,
-    entropy_weight=0.1,
-    decay=0.0,              # decay for EMA updates
-    imsize=8,                # input image size,
-    ignore_background=True,
+args = sys.argv
+if len(args) > 1:
+    params = yaml.safe_load(open("./params/"+args[1], 'r'))
+
+model_path = "./models/{dataset}/{model_name}/".format(
+    dataset=params["dataset"],
+    model_name=params["model_name"]
 )
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
-
-model_path = "./models/color_vqvae/"
-results_path = "./results/color_vqvae/"
-
-# Hyperparameters
-batch_size = 128
-num_epochs = 200
-lr = 5e-4
-weight_decay = 1e-5
-
-optimizer = optim.Adam(list(model.parameters()),
-            lr=lr,
-            weight_decay=weight_decay,
-        )
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
-    factor=0.5, patience=5, verbose=True)
-
+results_path = "./results/{dataset}/{model_name}/".format(
+    dataset=params["dataset"],
+    model_name=params["model_name"]
+)
 # Load and process data
 print("Loading and processing data...")
-with open("data/color_data.pkl", "rb") as f:
+with open(params["dataset_path"], 'rb') as f:
     data = pickle.load(f)
 
 # Convert data to torch tensors and create datasets
-initial_img = torch.FloatTensor(np.array([x[0] for x in data])) # [N, C, H, W]
-goal_img = torch.FloatTensor(np.array([x[3] for x in data]))  
-# Concatenate initial and goal images along batch dimension
-x_data = torch.cat([initial_img, goal_img], dim=0) 
+initial_img = torch.FloatTensor(np.array([x[0] for x in data])) # [N, H, W, C]
+goal_img = torch.FloatTensor(np.array([x[1] for x in data]))
+
+# Ensure proper tensor shape
+if initial_img.dim() == 3:  # If images are grayscale without channel dimension
+    initial_img = initial_img.unsqueeze(-1)  # Add channel dimension
+    goal_img = goal_img.unsqueeze(-1)
+else: # Images are RGB, move channel dimension to second position
+    initial_img = initial_img.permute(0,3,1,2) # [N, C, H, W]
+    goal_img = goal_img.permute(0,3,1,2) 
+x_data = torch.cat([initial_img, goal_img], dim=0) # [2N, C, H, W]
+x_data = x_data / x_data.max()  # Normalize to [0, 1]
 
 # Create dataset and dataloader
 dataset = torch.utils.data.TensorDataset(x_data)
@@ -61,11 +45,29 @@ train_size = int(0.8 * len(dataset))
 test_size = len(dataset) - train_size
 train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
 
+batch_size = params["batch_size"]
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-print("Starting training...")
+model_name = params["model_name"]
+print(f"Initializing {model_name} model and trainer...")
+model = get_model(model_name, **params["model_params"])
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
 
+# Hyperparameters
+num_epochs = params["num_epochs"]
+lr = float(params["lr"])
+weight_decay = float(params["weight_decay"])
+
+optimizer = optim.Adam(list(model.parameters()),
+            lr=lr,
+            weight_decay=weight_decay,
+        )
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
+    factor=0.5, patience=5)
+
+print("Starting training...")
 # Before training loop, add lists to store losses
 train_losses = []
 test_losses = []
@@ -83,27 +85,24 @@ for epoch in pbar:
     total_entropy_loss = 0
 
     epoch_encoding_indices = []  # Track all indices for this epoch
-    
-    # Force the decoder to output something non-black
-    with torch.no_grad():
-        random_embedding = torch.randn(1, model.embedding_dim, model.root_len, model.root_len).to(device)
-        output = model._decoder(random_embedding)
 
-    for data, in tqdm(train_loader, leave=False, desc=f"Epoch {epoch}: Training"):
+    pbar2 = tqdm(train_loader, leave=False, desc=f"Epoch {epoch}: Training")
+    for data, in pbar2:
+        pbar2.set_postfix({'LR': scheduler.get_last_lr()[0]})
         data = data.to(device)
-        vq_loss, _, _, recon_error, _, encoding_indices, entropy_loss = model.compute_loss(data)
-        loss = vq_loss + recon_error + entropy_loss
+        outputs, losses = model.compute_loss(data)
+        loss = losses['vq_loss'] + losses['recon_loss'] + losses['entropy_loss']
         # Collect encoding indices
-        epoch_encoding_indices.append(encoding_indices.cpu().numpy())
+        epoch_encoding_indices.append(outputs['encoding_indices'].cpu().numpy())
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         
         total_train_loss += loss.item()
-        total_vq_loss += vq_loss.item()
-        total_recon_loss += recon_error.item()
-        total_entropy_loss += entropy_loss.item()
+        total_vq_loss += losses['vq_loss'].item()
+        total_recon_loss += losses['recon_loss'].item()
+        total_entropy_loss += losses['entropy_loss'].item()
 
     # Analyze embedding usage for this epoch
     all_indices = np.concatenate(epoch_encoding_indices)
@@ -126,7 +125,7 @@ for epoch in pbar:
     vq_losses.append(avg_vq_loss)
     recon_losses.append(avg_recon_loss)
     entropy_losses.append(avg_entropy_loss)
-    scheduler.step(avg_train_loss)# In your training loop, print EMA cluster sizes
+    scheduler.step(avg_train_loss)
     
     # Validation loop
     model.eval()
@@ -134,8 +133,8 @@ for epoch in pbar:
     with torch.no_grad():
         for data, in tqdm(test_loader, leave=False, desc=f"Epoch {epoch}: Validation"):
             data = data.to(device)
-            vq_loss, _, _, recon_error, _, _, entropy_loss = model.compute_loss(data)
-            loss = vq_loss + recon_error + entropy_loss
+            _, losses = model.compute_loss(data)
+            loss = losses['vq_loss'] + losses['recon_loss'] + losses['entropy_loss']
             total_test_loss += loss.item()
     
     avg_test_loss = total_test_loss / len(test_loader)
@@ -147,14 +146,13 @@ for epoch in pbar:
                       'Entropy Loss': avg_entropy_loss,
                       'Embeddings Used': f"{unique_embeddings}/{model.num_embeddings}"})
     
-
     if avg_test_loss < 1e-5:  # Early stopping condition
         print(f"Early stopping at epoch {epoch} with test loss {avg_test_loss}")
         break
 
 # Save the final model
 print("Saving model...")
-torch.save(model.state_dict(), model_path + 'vqvae_final.pt')
+torch.save(model.state_dict(), model_path + params["model_save_name"])
 
 # Visualize loss history
 plt.figure(figsize=(10, 5))
@@ -206,7 +204,7 @@ viz_data, = next(data_iter)  # Note the comma after data
 viz_data = viz_data.to(device)
 
 with torch.no_grad():
-    _, reconstructions, _, _, quantized, encoding_indices, _ = model.compute_loss(viz_data)
+    outputs, _ = model.compute_loss(viz_data)
 
     # Take first 8 images
     n = min(viz_data.size(0), 8)
@@ -217,28 +215,22 @@ with torch.no_grad():
 
     # Plot original images
     for i in range(n):
-        axes[0, i].imshow(viz_data[i].squeeze().permute(1,2,0).cpu().numpy())
+        img = viz_data[i].squeeze()
+        if img.dim() > 2:
+            img = img.permute(1,2,0)
+        axes[0, i].imshow(img.cpu().numpy())
         axes[0, i].axis('off')
     axes[0, 0].set_title('Original')
 
-    # Plot quantized representations
-    encoding_indices = encoding_indices.view(batch_size,2,2)
-    for i in range(n):
-        indices = encoding_indices[i].cpu().numpy()
-        axes[1, i].imshow(np.zeros((model.root_len, model.root_len)), cmap='gray')  # black background
-        for y in range(model.root_len):
-            for x in range(model.root_len):
-                axes[1, i].text(x, y, f'{indices[y,x]}', 
-                            ha='center', va='center', color='white')
-        axes[1, i].axis('off')
-    axes[1, 0].set_title('Codes')
-
     # Plot reconstructions
     for i in range(n):
-        axes[2, i].imshow(reconstructions[i].squeeze().permute(1,2,0).detach().cpu().numpy())
-        axes[2, i].axis('off')
-    axes[2, 0].set_title('Reconstructed')
-    
+        img = outputs['reconstructions'][i].squeeze()
+        if img.dim() > 2:
+            img = img.permute(1,2,0)
+        axes[1, i].imshow(img.detach().cpu().numpy())
+        axes[1, i].axis('off')
+    axes[1, 0].set_title('Reconstructed')
+
     plt.tight_layout()
     plt.savefig(results_path + 'final_reconstructions.png', dpi=300, bbox_inches='tight')
     plt.show()

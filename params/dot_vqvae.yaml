@@ -1,0 +1,23 @@
+# Arguments for a VQ-VAE model trained on the dot dataset.
+dataset: "dot"
+dataset_path: "data/dot_data.pkl"
+model_name: "VQ_VAE"
+model_save_name: "vqvae_final.pt"
+model_params:
+  input_channels: 1
+  output_channels: 1
+  num_hiddens: 64
+  num_residual_layers: 2
+  num_residual_hiddens: 8
+  num_embeddings: 16
+  embedding_dim: 2
+  commitment_cost: 0.5
+  recon_weight: 1
+  entropy_weight: 0.1
+  decay: 0.0
+  imsize: 8
+  ignore_background: True
+batch_size: 128
+num_epochs: 100
+lr: 1e-3
+weight_decay: 0

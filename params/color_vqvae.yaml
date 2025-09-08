@@ -1,0 +1,23 @@
+# Arguments for a VQ-VAE model trained on the color dataset.
+dataset: "color"
+dataset_path: "data/color_data.pkl"
+model_name: "VQ_VAE"
+model_save_name: "vqvae_final.pt"
+model_params:
+  input_channels: 3
+  output_channels: 3
+  num_hiddens: 128
+  num_residual_layers: 6
+  num_residual_hiddens: 32
+  num_embeddings: 128
+  embedding_dim: 8
+  commitment_cost: 0.5
+  recon_weight: 0.5
+  entropy_weight: 0.1
+  decay: 0.0
+  imsize: 8
+  ignore_background: True
+batch_size: 128
+num_epochs: 200
+lr: 5e-4
+weight_decay: 1e-5

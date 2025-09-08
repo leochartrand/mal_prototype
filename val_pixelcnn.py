@@ -3,79 +3,71 @@ import torch.nn as nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, TensorDataset
 import pickle
+import os
+import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from datasets import ColorDataset
+from datasets import ValDataset
 from vqvae import VQ_VAE
 from pixelcnn import GatedPixelCNN
+from nlp_utils import prepare_commands, decode_commands
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 vqvae = VQ_VAE(
     input_channels=3,
     output_channels=3,
-    num_hiddens=128,          
-    num_residual_layers=6,  # number of residual layers
-    num_residual_hiddens=32,# channels in residual layers
-    num_embeddings=128,     # size of embedding codebook
-    embedding_dim=8,        # dimension of embedding vectors
-    commitment_cost=0.5,    # beta in the VQ-VAE paper
-    recon_weight=0.5,       # weight for reconstruction loss
-    entropy_weight=0.1,     # weight for entropy loss
-    decay=0.0,              # decay for EMA updates
-    imsize=8,               # input image size,
-    ignore_background=True, # activates weighting to ignore background (black) pixels in loss computation
+    num_hiddens=512,          
+    num_residual_layers=4,   # number of residual layers
+    num_residual_hiddens=64, # channels in residual layers
+    num_embeddings=1024,     # size of embedding codebook
+    embedding_dim=64,        # dimension of embedding vectors
+    commitment_cost=0.25,    # beta in the VQ-VAE paper
+    recon_weight=0.5,        # weight for reconstruction loss
+    entropy_weight=0.05,     # weight for entropy loss
+    decay=0.99,              # decay for EMA updates
+    imsize=48,               # input image size,
+    ignore_background=False, # activates weighting to ignore background (black) pixels in loss computation
 )
-vqvae.load_state_dict(torch.load("./models/color_vqvae/vqvae_final.pt", weights_only=True))
+vqvae.load_state_dict(torch.load("./models/val/vqvae/vqvae_final.pt", weights_only=True))
 vqvae = vqvae.to(device)
 vqvae.eval()
-root_len = vqvae.root_len
-num_embeddings = vqvae.num_embeddings
-embedding_dim = vqvae.embedding_dim
-imsize = vqvae.imsize
-input_channels = vqvae.input_channels
-# output_channels = vqvae.output_channels
 
-model_path = "./models/color_pixelcnn/"
-results_path = "./results/color_pixelcnn/"
+model_path = "./models/val_pixelcnn/"
+results_path = "./results/val_pixelcnn/"
 
 # Hyperparameters
 batch_size = 256
-num_epochs = 200
-lr = 1e-4
-n_layers = 15
-dim = 192
+num_epochs = 50
+lr = 5e-5
+n_layers = 20
+dim = 256
 
 # Load and process data
 print("Loading and processing data...")
-with open("data/color_data.pkl", "rb") as f:
-    data = pickle.load(f)
 
-# Convert string commands to integer indices
-command_to_idx = {"up": 0, "down": 1, "left": 2, "right": 3}
+with open("data/val_data.pkl", 'rb') as f:
+    data = pickle.load(f)
 
 # Get VQ-VAE discrete codes (not raw images)
 initial_codes = []  # VQ-VAE discrete codes for before images
 target_codes = []   # VQ-VAE discrete codes for after images
-commands = []
 with torch.no_grad():
     for x in tqdm(data):
-        before_img = torch.FloatTensor(x[0]).unsqueeze(0).unsqueeze(0).to(device) # [1, 1, C, H, W]
-        after_img = torch.FloatTensor(x[3]).unsqueeze(0).unsqueeze(0).to(device)
-        
-        _, _, _, _, _, z0, _ = vqvae.compute_loss(before_img)
-        _, _, _, _, _, zt, _ = vqvae.compute_loss(after_img)
-        
-        initial_codes.append(z0.squeeze()) # [4]
-        target_codes.append(zt.squeeze()) # [4]
-        move_one_hot = F.one_hot(torch.LongTensor([x[1]]), num_classes=4).float()
-        color_one_hot = F.one_hot(torch.LongTensor([x[2]]), num_classes=3).float()
-        command = torch.cat([move_one_hot, color_one_hot], dim=1).squeeze() # [7]
-        commands.append(command)
+        before_img = torch.FloatTensor(np.array(x[0])/255.).permute(2,0,1).unsqueeze(0).unsqueeze(0).to(device) # [1, 1, C, H, W]
+        after_img = torch.FloatTensor(np.array(x[1])/255.).permute(2,0,1).unsqueeze(0).unsqueeze(0).to(device)
 
-initial_codes = torch.stack(initial_codes)  # [N,4]
-target_codes = torch.stack(target_codes)   # [N,4] 
-commands = torch.stack(commands)           # [N,7]
+        outputs, _ = vqvae.compute_loss(before_img)
+        outputs2, _ = vqvae.compute_loss(after_img)
+
+        initial_codes.append(outputs["encoding_indices"].squeeze())
+        target_codes.append(outputs2["encoding_indices"].squeeze()) 
+
+initial_codes = torch.stack(initial_codes) 
+target_codes = torch.stack(target_codes) 
+
+commands_txt = [x[2] for x in data]  # list of strings
+commands, vocab, word2idx, idx2word = prepare_commands(commands_txt)
 
 # Random split
 indices = torch.randperm(len(initial_codes))
@@ -83,11 +75,11 @@ n_train = int(0.8 * len(initial_codes))
 train_indices = indices[:n_train]
 test_indices = indices[n_train:]
 
-train_dataset = ColorDataset(
+train_dataset = ValDataset(
     initial_codes[train_indices], 
     commands[train_indices], 
     target_codes[train_indices])
-test_dataset = ColorDataset(
+test_dataset = ValDataset(
     initial_codes[test_indices], 
     commands[test_indices], 
     target_codes[test_indices])
@@ -96,21 +88,21 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
 # Calculate actual conditioning size
-initial_cont_size = vqvae.embedding_dim * vqvae.discrete_size  # 8 * 4 = 32
-command_size = 7  # double one-hot commands
-total_cond_size = initial_cont_size + command_size  # 32 + 7 = 39
+initial_cont_size = vqvae.embedding_dim * vqvae.discrete_size
+command_size = len(vocab) 
+total_cond_size = initial_cont_size + command_size
 
 # Initialize PixelCNN model
 pixelcnn = GatedPixelCNN(
     vqvae=vqvae,
-    input_dim=num_embeddings, 
+    input_dim=vqvae.num_embeddings, 
     dim=dim, 
     n_layers=n_layers, 
     n_classes=total_cond_size, 
     criterion=nn.CrossEntropyLoss().cuda()).to(device)
 optimizer = torch.optim.Adam(pixelcnn.parameters(), lr=lr)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
-
+pixelcnn.load_state_dict(torch.load("./models/val/pixelcnn/pixelcnn_final.pt", weights_only=True))
 print("Starting training...")
 
 train_losses = []
@@ -165,7 +157,7 @@ plt.grid(True)
 plt.savefig(results_path + 'training_losses.png')
 plt.show()
 
-# pixelcnn.load_state_dict(torch.load("./models/color_pixelcnn/pixelcnn_final.pt", weights_only=True))
+# pixelcnn.load_state_dict(torch.load("./models/val_pixelcnn/pixelcnn_final.pt", weights_only=True))
 
 # Visualize some samples
 n_samples = 8
@@ -198,18 +190,12 @@ with torch.no_grad():
         generated_img = vqvae.decode(generated_codes.reshape(1, -1), cont=False).squeeze().permute(1,2,0).detach().cpu().numpy()
 
         # Get command name
-        move_one_hot = viz_command[0, :4]
-        color_one_hot = viz_command[0, 4:]
-
-        move_idx = move_one_hot.argmax().item()
-        move_names = ["up", "down", "left", "right"]
-        color_idx = color_one_hot.argmax().item()
-        color_names = ["red", "green", "blue"]
+        command = decode_commands(viz_command[0], idx2word)[0]
         
         samples.append({
             'initial': initial_img.squeeze(),
             'generated': generated_img.squeeze(), 
-            'command': move_names[move_idx] + " " + color_names[color_idx]
+            'command': command
         })
 
     samples2 = []
