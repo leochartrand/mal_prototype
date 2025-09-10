@@ -1,0 +1,26 @@
+dataset: "color"
+dataset_path: "data/color_data.pkl"
+model_name: "pixelcnn"
+model_save_name: "pixelcnn_final.pt"
+model_params:
+  dim: 192
+  n_layers: 15
+vqvae: 
+  model_save_name: "vqvae_final.pt"
+  model_params:
+    input_channels: 3
+    output_channels: 3
+    num_hiddens: 128
+    num_residual_layers: 6
+    num_residual_hiddens: 32
+    num_embeddings: 128
+    embedding_dim: 8
+    commitment_cost: 0.5
+    recon_weight: 0.5         # no modifs
+    entropy_weight: 0.1       # not from the paper
+    decay: 0.0
+    imsize: 8
+    ignore_background: True  # For dot/color datasets
+batch_size: 256
+num_epochs: 200
+lr: 1e-4

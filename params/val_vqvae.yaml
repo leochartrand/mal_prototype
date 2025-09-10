@@ -1,23 +1,36 @@
 # Arguments for a VQ-VAE model trained on the val dataset.
 dataset: "val"
-dataset_path: "data/val_data.pkl"
-model_name: "VQ_VAE"
+dataset_path: "data/val_data_full.pkl"
+model_name: "vqvae"
 model_save_name: "vqvae_final.pt"
 model_params:
   input_channels: 3
   output_channels: 3
-  num_hiddens: 512
-  num_residual_layers: 4
+  num_hiddens: 128
+  num_residual_layers: 3
   num_residual_hiddens: 64
-  num_embeddings: 1024
-  embedding_dim: 64
+  num_embeddings: 512
+  embedding_dim: 5
   commitment_cost: 0.25
-  recon_weight: 0.5
-  entropy_weight: 0.05
-  decay: 0.99
+  recon_weight: 1.0         # no modifs
+  entropy_weight: 0.0       # not from the paper
+  decay: 0.0
   imsize: 48
-  ignore_background: False
+  ignore_background: False  # For dot/color datasets
 batch_size: 128
 num_epochs: 300
-lr: 5e-5
+lr: 1e-4
 weight_decay: 1e-5
+
+# From the VAL paper:
+
+# Hyper-parameter           Value
+# -----------------------------------------
+# Convolution Layers        3
+# Convolution Hidden Size   128
+# Residual Layers           3
+# Residual Hidden Size      64
+# Embedding Size            5
+# Dictionary Size           512
+# Commitment Cost           0.25
+# EMA Embedding             False

@@ -154,32 +154,32 @@ class GatedPixelCNN(nn.Module):
                 )
         return x
     
-    def compute_loss(self, initial, commands, target, test=False):
+    def compute_loss(self, z0, zt, c, test=False):
 
         root_len = self.vqvae.root_len
         num_embeddings = self.vqvae.num_embeddings
 
         # Data shape: [batch, input stack, input size]
         # Split stacked data: [initial, command, target]
-        initial = initial.long()  
-        target = target.long().reshape(-1, root_len, root_len)  
+        z0 = z0.long()  
+        zt = zt.long().reshape(-1, root_len, root_len)  
         
         with torch.no_grad(): 
-            initial_cont = self.vqvae.discrete_to_cont(initial).reshape(initial.shape[0], -1)
+            initial_cont = self.vqvae.discrete_to_cont(z0).reshape(z0.shape[0], -1)
             initial_cont = F.normalize(initial_cont, dim=1)
         # Combine conditioning
         cond = torch.cat([
             initial_cont.detach(),
-            commands.detach() 
+            c.detach() 
         ], dim=1) 
 
         # Train PixelCNN with images
-        logits = self.forward(target, cond)
+        logits = self.forward(zt, cond)
         logits = logits.permute(0, 2, 3, 1).contiguous()
 
         loss = self.criterion(
             logits.view(-1, num_embeddings),
-            target.contiguous().view(-1)
+            zt.contiguous().view(-1)
         )
 
         return loss    

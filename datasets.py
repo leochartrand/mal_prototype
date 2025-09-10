@@ -1,25 +1,13 @@
 from torch.utils.data import Dataset
 
 class MultiModalDataset(Dataset):
-    def __init__(self, initial_codes, commands, target_codes):
-        self.initial_codes = initial_codes
-        self.target_codes = target_codes
-        self.commands = commands
+    def __init__(self, z0, zt, c):
+        self.z0 = z0
+        self.zt = zt
+        self.c = c
 
     def __len__(self):
-        return len(self.initial_codes)
+        return len(self.z0)
 
     def __getitem__(self, idx):
-        return self.initial_codes[idx], self.commands[idx], self.target_codes[idx]
-
-class DotDataset(MultiModalDataset):
-    def __init__(self, initial_codes, commands, target_codes):
-        super().__init__(initial_codes, commands, target_codes)
-
-class ColorDataset(MultiModalDataset):
-    def __init__(self, initial_codes, commands, target_codes):
-        super().__init__(initial_codes, commands, target_codes)
-        
-class ValDataset(MultiModalDataset):
-    def __init__(self, initial_codes, commands, target_codes):
-        super().__init__(initial_codes, commands, target_codes)
+        return self.z0[idx], self.zt[idx], self.c[idx]
