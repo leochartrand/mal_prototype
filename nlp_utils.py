@@ -55,3 +55,9 @@ def prepare_commands(commands_txt):
     encoded_commands = index_encode_commands(tokenized_commands, word2idx)
     commands = one_hot_encode_commands(encoded_commands, vocab)
     return commands, vocab, word2idx, idx2word
+
+def encode_commands(commands_txt, word2idx, vocab):
+    tokenized_commands = tokenize_commands(commands_txt)
+    encoded_commands = index_encode_commands(tokenized_commands, word2idx)
+    commands = one_hot_encode_commands(encoded_commands, vocab)
+    return commands

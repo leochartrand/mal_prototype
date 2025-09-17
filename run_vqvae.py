@@ -1,25 +1,27 @@
 import torch
+from torch import optim
 import numpy as np
-import pickle
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from torch import optim
+import pickle
 import yaml
 import sys
+import os
+
 from vqvae import VQ_VAE
+from datasets import augment_batch, resize_and_normalize_batch
 
 args = sys.argv
 if len(args) > 1:
     params = yaml.safe_load(open("./params/"+args[1], 'r'))
 
-model_path = "./models/{dataset}/{model_name}/".format(
-    dataset=params["dataset"],
-    model_name=params["model_name"]
-)
-results_path = "./results/{dataset}/{model_name}/".format(
-    dataset=params["dataset"],
-    model_name=params["model_name"]
-)
+model_path = params["model_path"]
+if not os.path.exists(os.path.dirname(model_path)):
+    os.makedirs(os.path.dirname(model_path))
+results_path = params["results_path"]
+if not os.path.exists(os.path.dirname(results_path)):
+    os.makedirs(os.path.dirname(results_path))
+
 # Load and process data
 print("Loading and processing data...")
 with open(params["dataset_path"], 'rb') as f:
@@ -31,8 +33,7 @@ xt = torch.FloatTensor(np.array([x[1] for x in data]))
 
 x0 = x0.permute(0,3,1,2) # [N, C, H, W]
 xt = xt.permute(0,3,1,2) 
-x_data = torch.cat([x0, xt], dim=0) # [2N, C, H, W]
-x_data = x_data / x_data.max()  # Normalize to [0, 1]
+x_data = torch.cat([x0, xt], dim=0) / 255.0# [2N, C, H, W]
 
 # Create dataset and dataloader
 dataset = torch.utils.data.TensorDataset(x_data)
@@ -53,8 +54,7 @@ optimizer = optim.Adam(list(model.parameters()),
             lr=float(params["lr"]),
             weight_decay=float(params["weight_decay"]),
         )
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
-    factor=0.5, patience=5)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
 
 print("Starting training...")
 # Before training loop, add lists to store losses
@@ -73,8 +73,7 @@ for epoch in pbar:
 
     pbar2 = tqdm(train_loader, leave=False, desc=f"Epoch {epoch}: Training")
     for data, in pbar2:
-        pbar2.set_postfix({'LR': scheduler.get_last_lr()[0]})
-        data = data.to(device)
+        data = augment_batch(data.to(device), size=(model.imsize, model.imsize))
         outputs, losses = model.compute_loss(data)
         loss = losses['vq_loss'] + losses['recon_loss']
         # Collect encoding indices
@@ -101,14 +100,14 @@ for epoch in pbar:
     
     avg_train_loss = total_train_loss / len(train_loader)
     train_losses.append(avg_train_loss)
-    scheduler.step(avg_train_loss)
+    scheduler.step()
     
     # Validation loop
     model.eval()
     total_test_loss = 0
     with torch.no_grad():
         for data, in tqdm(test_loader, leave=False, desc=f"Epoch {epoch}: Validation"):
-            data = data.to(device)
+            data = resize_and_normalize_batch(data.to(device), size=(model.imsize, model.imsize))
             _, losses = model.compute_loss(data)
             loss = losses['vq_loss'] + losses['recon_loss']
             total_test_loss += loss.item()
@@ -123,7 +122,7 @@ for epoch in pbar:
     if avg_test_loss < best_loss:
         best_loss = avg_test_loss
         best_loss_epoch = epoch
-        torch.save(model.state_dict(), model_path + params["model_save_name"])
+        torch.save(model.state_dict(), model_path)
     
     if avg_test_loss < 1e-5:  # Early stopping condition
         print(f"Early stopping at epoch {epoch} with test loss {avg_test_loss}")
@@ -137,7 +136,7 @@ plt.plot(test_losses, label='Test Loss', color='green')
 plt.scatter([best_loss_epoch], [test_losses[best_loss_epoch]], color='green', zorder=5)
 plt.xlabel('Epoch')
 plt.ylabel('Loss')
-plt.title('Training and Test Losses (Best loss: {:.4f})'.format(train_losses[best_loss_epoch]))
+plt.title('Training and Test Losses (Best loss: {:.4f})'.format(test_losses[best_loss_epoch]))
 plt.legend()
 plt.grid(True)
 plt.savefig(results_path + 'training_losses.png')
@@ -162,10 +161,12 @@ plt.tight_layout()
 plt.savefig(results_path + 'embedding_utilization.png')
 plt.show()
 
+# model.load_state_dict(torch.load(model_path))
+
 # Visualize some reconstructions and associated latent codes
-data_iter = iter(train_loader)
+data_iter = iter(test_loader)
 viz_data, = next(data_iter)  # Note the comma after data
-viz_data = viz_data.to(device)
+viz_data = resize_and_normalize_batch(viz_data.to(device), size=(model.imsize, model.imsize))
 
 with torch.no_grad():
     outputs, _ = model.compute_loss(viz_data)

@@ -1,7 +1,7 @@
 # Arguments for a VQ-VAE model trained on the val dataset.
 dataset_path: "data/val_data.pkl"
-model_path: "models/vqvae/vqvae_final.pt"
-results_path: "results/vqvae/"
+model_path: "models/vqvae_baseline/vqvae_baseline.pt"
+results_path: "results/vqvae_baseline/"
 model_params:
   input_channels: 3
   output_channels: 3

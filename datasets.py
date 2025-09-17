@@ -1,13 +1,36 @@
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+import kornia.augmentation as K
 from torch.utils.data import Dataset
 
+def augment_batch(data, size=(48,48)):
+    augmentation = K.AugmentationSequential(
+        K.ColorJitter(
+            brightness=(0.75,1.25), 
+            contrast=(0.9,1.1), 
+            saturation=(0.9,1.1), 
+            hue=(-0.1,0.1)),
+        K.RandomResizedCrop(
+            size=size, 
+            scale=(0.9, 1.0), 
+            ratio=(1, 1))
+    )
+    data = augmentation(data)
+    return data 
+
+def resize_and_normalize_batch(data, size=(48,48)):
+    data = K.Resize(size)(data)
+    return data
+
 class MultiModalDataset(Dataset):
-    def __init__(self, z0, zt, c):
-        self.z0 = z0
-        self.zt = zt
+    def __init__(self, x0, xt, c):
+        self.x0 = x0
+        self.xt = xt
         self.c = c
 
     def __len__(self):
-        return len(self.z0)
+        return len(self.x0)
 
     def __getitem__(self, idx):
-        return self.z0[idx], self.zt[idx], self.c[idx]
+        return self.x0[idx], self.xt[idx], self.c[idx]
+

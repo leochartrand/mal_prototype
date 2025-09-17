@@ -1,6 +1,6 @@
 dataset_path: "data/val_data.pkl"
-model_path: "models/pixelcnn/pixelcnn_final.pt"
-results_path: "results/pixelcnn/"
+model_path: "models/pixelcnn_baseline/pixelcnn_baseline.pt"
+results_path: "results/pixelcnn_baseline/"
 model_params:
   dim: 256
   n_layers: 15

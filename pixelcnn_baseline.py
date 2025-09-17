@@ -13,7 +13,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 def weights_init(m):
     classname = m.__class__.__name__
     try:
@@ -74,7 +73,7 @@ class GatedMaskedConv2d(nn.Module):
 
     def forward(self, x_v, x_h, h):
         if self.mask_type == 'A':
-            self.make_causal() # possibly wasteful computation, but minimal impact
+            self.make_causal()
 
         h = self.class_cond_embedding(h)
 
@@ -100,7 +99,7 @@ class GatedMaskedConv2d(nn.Module):
 
 
 class GatedPixelCNN(nn.Module):
-    def __init__(self, vqvae, input_dim=256, dim=64, n_layers=15, n_classes=1, criterion=nn.CrossEntropyLoss()):
+    def __init__(self, input_dim=256, dim=64, n_layers=15, n_classes=1):
         super().__init__()
         self.dim = dim
         self.is_conditional = True
@@ -108,7 +107,6 @@ class GatedPixelCNN(nn.Module):
         self.embedding = nn.Embedding(input_dim, dim)
         # Building the PixelCNN layer by layer
         self.layers = nn.ModuleList()
-        self.criterion = criterion
 
         # Initial block with Mask-A convolution
         # Rest with Mask-B convolutions
@@ -121,6 +119,7 @@ class GatedPixelCNN(nn.Module):
                 GatedMaskedConv2d(mask_type, dim, kernel, residual, n_classes)
             )
 
+
         # Add the output layer
         self.output_conv = nn.Sequential(
             nn.Conv2d(dim, 512, 1),
@@ -129,9 +128,6 @@ class GatedPixelCNN(nn.Module):
         )
 
         self.apply(weights_init)
-
-        # Load the VQ-VAE submodule only after initializing weights
-        self.vqvae = vqvae
 
     def forward(self, x, cond=None):
 
@@ -149,69 +145,19 @@ class GatedPixelCNN(nn.Module):
 
         return self.output_conv(x_h)
 
-    def generate(self, shape=(12, 12), batch_size=64, cond=None, temperature=1.0):
+    def generate(self, shape=(12, 12), batch_size=64, cond=None):
 
         param = next(self.parameters())
-        zg = torch.zeros(
+        x = torch.zeros(
             (batch_size, *shape),
             dtype=torch.int64, device=param.device
         )
-
-        # Track log probabilities for joint confidence
-        joint_probs = torch.zeros(batch_size, device=param.device)
         for i in range(shape[0]):
             for j in range(shape[1]):
-                logits = self.forward(zg, cond) #might need to convert 0 to long
-                probs = F.softmax(logits[:, :, i, j] / temperature, -1)
-
-                # Sample
-                sampled = probs.multinomial(1)
-                zg.data[:, i, j].copy_(sampled.squeeze().data)
-
-                # Accumulate probabilities
-                sampled_probs = probs.gather(1, sampled).squeeze()
-                joint_probs += torch.log(sampled_probs + 1e-10) # [B]
-
-        return zg, joint_probs
+                logits = self.forward(x, cond) #might need to convert 0 to long
+                probs = F.softmax(logits[:, :, i, j], -1)
+                x.data[:, i, j].copy_(
+                    probs.multinomial(1).squeeze().data
+                )
+        return x
     
-    def safe_generate(self, n_trials=10, min_confidence=-5.0, **kwargs):
-        """
-        Generate samples, retrying if any pixel has very low probability.
-        This is to avoid generating completely wrong samples due to sampling errors.
-        """
-        for i in range(n_trials):
-            zg, joint_probs = self.generate(**kwargs)
-            if torch.all(joint_probs > min_confidence):
-                return zg, joint_probs
-        print("Warning: All trials had low probability pixels, returning last sample.")
-        return zg, joint_probs
-    
-    def compute_loss(self, z0, zt, c, test=False):
-
-        root_len = self.vqvae.root_len
-        num_embeddings = self.vqvae.num_embeddings
-
-        # Data shape: [batch, input stack, input size]
-        # Split stacked data: [initial, command, target]
-        z0 = z0.long()  
-        zt = zt.long().reshape(-1, root_len, root_len)  
-        
-        with torch.no_grad(): 
-            initial_cont = self.vqvae.discrete_to_cont(z0).reshape(z0.shape[0], -1)
-            initial_cont = F.normalize(initial_cont, dim=1).detach()
-        # Combine conditioning
-        cond = torch.cat([
-            initial_cont,
-            c.detach() 
-        ], dim=1) 
-        
-        # Train PixelCNN with images
-        logits = self.forward(zt, cond)
-        logits = logits.permute(0, 2, 3, 1).contiguous()
-
-        loss = self.criterion(
-            logits.view(-1, num_embeddings),
-            zt.contiguous().view(-1)
-        )
-
-        return loss    

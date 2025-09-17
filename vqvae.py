@@ -1,3 +1,14 @@
+"""
+This is an implementation of the VQVAE model used in:
+    1.  Khazatsky, Alexander et al. “What Can I Do Here? Learning New Skills by Imagining Visual Affordances.” 2021 IEEE International Conference on Robotics and Automation (ICRA) (2021): 14291-14297.
+        https://arxiv.org/abs/2106.00671 
+VQVAE:
+    2.  "Neural Discrete Representation Learning", van den Oord et al. 2017
+        https://arxiv.org/abs/1711.00937
+
+Source: https://github.com/anair13/rlkit/blob/master/rlkit/torch/vae/vq_vae.py
+"""
+
 from __future__ import print_function
 import torch
 import numpy as np
@@ -306,6 +317,8 @@ class VQ_VAE(nn.Module):
             self.root_len = 9
         elif imsize == 48:
             self.root_len = 12
+        elif imsize == 64:
+            self.root_len = 16
         elif imsize == 84:
             self.root_len = 21
         elif imsize == 8:
@@ -333,9 +346,6 @@ class VQ_VAE(nn.Module):
         else:
             recon_loss = F.mse_loss(recon, inputs) * self.recon_weight
 
-        # Entropy loss to encourage usage of more embeddings
-        entropy_loss = self.codebook_entropy(inputs, encoding_indices)
-
         outputs = {
             'reconstructions': recon,
             'quantized': quantized,
@@ -346,7 +356,6 @@ class VQ_VAE(nn.Module):
         losses = {
             'vq_loss': vq_loss,
             'recon_loss': recon_loss,
-            'entropy_loss': entropy_loss,
         }
 
         return outputs, losses
