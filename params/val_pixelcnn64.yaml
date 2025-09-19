@@ -1,0 +1,25 @@
+dataset_path: "data/val_data.pkl"
+model_path: "models/pixelcnn64/pixelcnn_final.pt"
+results_path: "results/pixelcnn64/"
+model_params:
+  dim: 256
+  n_layers: 15
+vqvae: 
+  model_path: "models/vqvae64/model.pt"
+  model_params:
+    input_channels: 3
+    output_channels: 3
+    num_hiddens: 256
+    num_residual_layers: 4
+    num_residual_hiddens: 128
+    num_embeddings: 2048
+    embedding_dim: 8
+    commitment_cost: 0.25
+    recon_weight: 1.0         
+    entropy_weight: 0.1       
+    decay: 0.0
+    imsize: 64
+batch_size: 32
+num_epochs: 300
+lr: 3e-4
+weight_decay: 1e-5

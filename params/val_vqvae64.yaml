@@ -1,5 +1,5 @@
 # Arguments for a VQ-VAE model trained on the val dataset.
-dataset_path: "data/val_data.pkl"
+dataset_path: "data/val_full/"
 model_path: "models/vqvae64/model.pt"
 results_path: "results/vqvae64/"
 model_params:

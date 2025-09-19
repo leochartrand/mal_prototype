@@ -1,6 +1,7 @@
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 import kornia.augmentation as K
+import torch
 from torch.utils.data import Dataset
 
 def augment_batch(data, size=(48,48)):
@@ -12,8 +13,9 @@ def augment_batch(data, size=(48,48)):
             hue=(-0.1,0.1)),
         K.RandomResizedCrop(
             size=size, 
-            scale=(0.9, 1.0), 
-            ratio=(1, 1))
+            scale=(0.95, 1.0), 
+            ratio=(1, 1)),
+        K.RandomHorizontalFlip(p=0.5),
     )
     data = augmentation(data)
     return data 
@@ -21,6 +23,16 @@ def augment_batch(data, size=(48,48)):
 def resize_and_normalize_batch(data, size=(48,48)):
     data = K.Resize(size)(data)
     return data
+
+class FrameDataset(Dataset):
+    def __init__(self, trajs):
+        self.frames = [frame for traj in trajs for frame in traj]
+        rand_perm = torch.randperm(len(self.frames), generator=torch.Generator().manual_seed(42)) # For reproducibility
+        self.frames = [self.frames[i] for i in rand_perm]
+    def __len__(self):
+        return len(self.frames)
+    def __getitem__(self, idx):
+        return self.frames[idx]
 
 class MultiModalDataset(Dataset):
     def __init__(self, x0, xt, c):

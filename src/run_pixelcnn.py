@@ -10,10 +10,10 @@ import yaml
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-from vqvae import VQ_VAE
-from pixelcnn import GatedPixelCNN
-from nlp_utils import prepare_commands, encode_commands, decode_commands
-from datasets import MultiModalDataset, augment_batch, resize_and_normalize_batch
+from models.vqvae import VQ_VAE
+from models.pixelcnn import GatedPixelCNN
+from utils.nlp_utils import prepare_onehot_commands, encode_commands, decode_commands
+from utils.datasets import MultiModalDataset, augment_batch, resize_and_normalize_batch
 
 args = sys.argv
 if len(args) > 1:
@@ -45,7 +45,7 @@ xt_data = torch.FloatTensor(np.array([x[1] for x in data])).permute(0,3,1,2) / 2
 
 
 commands_txt = [x[2] for x in data]  # list of strings
-commands, vocab, word2idx, idx2word = prepare_commands(commands_txt)
+commands, vocab, word2idx, idx2word = prepare_onehot_commands(commands_txt)
 
 # Random split
 indices = torch.randperm(len(x0_data), generator=torch.Generator().manual_seed(42)) # For reproducibility
@@ -94,9 +94,9 @@ def augment_and_encode_batch(x0, xt):
     # Augment
     seed = torch.randint(0, 100000, (1,)).item()
     torch.manual_seed(seed)
-    x0 = augment_batch(x0)
+    x0 = augment_batch(x0, size=(vqvae.imsize, vqvae.imsize))
     torch.manual_seed(seed)
-    xt = augment_batch(xt)
+    xt = augment_batch(xt, size=(vqvae.imsize, vqvae.imsize))
 
     # Encode
     with torch.no_grad():
@@ -109,8 +109,8 @@ def augment_and_encode_batch(x0, xt):
 
 def resize_and_encode_batch(x0, xt):
     # Resize and normalize
-    x0 = resize_and_normalize_batch(x0)
-    xt = resize_and_normalize_batch(xt)
+    x0 = resize_and_normalize_batch(x0, size=(vqvae.imsize, vqvae.imsize))
+    xt = resize_and_normalize_batch(xt, size=(vqvae.imsize, vqvae.imsize))
 
     # Encode
     with torch.no_grad():

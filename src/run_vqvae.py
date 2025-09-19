@@ -4,12 +4,13 @@ import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import pickle
+import glob
 import yaml
 import sys
 import os
 
-from vqvae import VQ_VAE
-from datasets import augment_batch, resize_and_normalize_batch
+from models.vqvae import VQ_VAE
+from utils.datasets import FrameDataset, augment_batch, resize_and_normalize_batch
 
 args = sys.argv
 if len(args) > 1:
@@ -24,22 +25,29 @@ if not os.path.exists(os.path.dirname(results_path)):
 
 # Load and process data
 print("Loading and processing data...")
-with open(params["dataset_path"], 'rb') as f:
-    data = pickle.load(f)
+data_files = sorted(glob.glob(f"{params["dataset_path"]}*.pkl"))  # Adjust path/pattern as needed
+data = []
+for file in data_files:
+    with open(file, 'rb') as f:
+        part = pickle.load(f)
+        # Each frame to float tensor, concat at dim 0, list of frames to float tensor traj
+        part_trajs = [torch.FloatTensor(np.array(traj)).permute(0,3,1,2) / 255.0 for traj in part]
+        data.extend(part_trajs) 
+        del part  # Free memory
+        del part_trajs
 
-# Convert data to torch tensors and create datasets
-x0 = torch.FloatTensor(np.array([x[0] for x in data])) # [N, H, W, C]
-xt = torch.FloatTensor(np.array([x[1] for x in data]))
+print(f"Total trajectories: {len(data)}, Total frames: {sum(len(traj) for traj in data)}")
 
-x0 = x0.permute(0,3,1,2) # [N, C, H, W]
-xt = xt.permute(0,3,1,2) 
-x_data = torch.cat([x0, xt], dim=0) / 255.0# [2N, C, H, W]
+# Data split
+split_indices = torch.randperm(len(data), generator=torch.Generator().manual_seed(42)) # For reproducibility
+n_train = int(0.8 * len(data))
+train_dataset = [data[i] for i in split_indices[:n_train]]
+test_dataset = [data[i] for i in split_indices[n_train:]]
+del data  # Free memory
+del split_indices
 
-# Create dataset and dataloader
-dataset = torch.utils.data.TensorDataset(x_data)
-train_size = int(0.8 * len(dataset))
-test_size = len(dataset) - train_size
-train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+train_dataset = FrameDataset(train_dataset)
+test_dataset = FrameDataset(test_dataset)
 
 batch_size = params["batch_size"]
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -72,7 +80,7 @@ for epoch in pbar:
     epoch_encoding_indices = []  # Track all indices for this epoch
 
     pbar2 = tqdm(train_loader, leave=False, desc=f"Epoch {epoch}: Training")
-    for data, in pbar2:
+    for data in pbar2:
         data = augment_batch(data.to(device), size=(model.imsize, model.imsize))
         outputs, losses = model.compute_loss(data)
         loss = losses['vq_loss'] + losses['recon_loss']
@@ -95,7 +103,7 @@ for epoch in pbar:
         'epoch': epoch,
         'unique_used': embedding_usage,
         'total_embeddings': model.num_embeddings,
-        'usage_distribution': embedding_counts
+        'usage_distribution': embedding_counts / np.sum(embedding_counts)  # Normalize
     })
     
     avg_train_loss = total_train_loss / len(train_loader)
@@ -106,9 +114,9 @@ for epoch in pbar:
     model.eval()
     total_test_loss = 0
     with torch.no_grad():
-        for data, in tqdm(test_loader, leave=False, desc=f"Epoch {epoch}: Validation"):
+        for data in tqdm(test_loader, leave=False, desc=f"Epoch {epoch}: Validation"):
             data = resize_and_normalize_batch(data.to(device), size=(model.imsize, model.imsize))
-            _, losses = model.compute_loss(data)
+            outputs, losses = model.compute_loss(data)
             loss = losses['vq_loss'] + losses['recon_loss']
             total_test_loss += loss.item()
     
@@ -127,6 +135,7 @@ for epoch in pbar:
     if avg_test_loss < 1e-5:  # Early stopping condition
         print(f"Early stopping at epoch {epoch} with test loss {avg_test_loss}")
         break
+
 
 # Visualize loss history
 plt.figure(figsize=(10, 5))
@@ -161,11 +170,11 @@ plt.tight_layout()
 plt.savefig(results_path + 'embedding_utilization.png')
 plt.show()
 
-# model.load_state_dict(torch.load(model_path))
-
+model.load_state_dict(torch.load(model_path))
+model.eval()
 # Visualize some reconstructions and associated latent codes
 data_iter = iter(test_loader)
-viz_data, = next(data_iter)  # Note the comma after data
+viz_data = next(data_iter)  # Note the comma after data
 viz_data = resize_and_normalize_batch(viz_data.to(device), size=(model.imsize, model.imsize))
 
 with torch.no_grad():

@@ -14,7 +14,7 @@ import torch
 import numpy as np
 from torch import nn
 from torch.nn import functional as F
-import pytorch_util as ptu
+import utils.pytorch_util as ptu
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -346,6 +346,9 @@ class VQ_VAE(nn.Module):
         else:
             recon_loss = F.mse_loss(recon, inputs) * self.recon_weight
 
+        if self.entropy_weight > 0:
+            entropy_loss = self.codebook_entropy(inputs, encoding_indices)
+
         outputs = {
             'reconstructions': recon,
             'quantized': quantized,
@@ -356,6 +359,7 @@ class VQ_VAE(nn.Module):
         losses = {
             'vq_loss': vq_loss,
             'recon_loss': recon_loss,
+            'entropy_loss': entropy_loss
         }
 
         return outputs, losses
