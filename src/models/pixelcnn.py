@@ -189,7 +189,7 @@ class GatedPixelCNN(nn.Module):
     def compute_loss(self, z0, zt, c, test=False):
 
         root_len = self.vqvae.root_len
-        num_embeddings = self.vqvae.num_embeddings
+        codebook_size = self.vqvae.codebook_size
 
         # Data shape: [batch, input stack, input size]
         # Split stacked data: [initial, command, target]
@@ -210,7 +210,7 @@ class GatedPixelCNN(nn.Module):
         logits = logits.permute(0, 2, 3, 1).contiguous()
 
         loss = self.criterion(
-            logits.view(-1, num_embeddings),
+            logits.view(-1, codebook_size),
             zt.contiguous().view(-1)
         )
 

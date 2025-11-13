@@ -63,7 +63,7 @@ def decode_commands(encoded_commands, idx2word):
         decoded_commands.append(decoded)
     return decoded_commands
 
-def prepare_onehot_commands(commands_txt):
+def prepare_fewhot_commands(commands_txt):
     tokenized_commands = tokenize_commands(commands_txt)
     vocab = build_vocab(tokenized_commands)
     word2idx, idx2word = create_mappings(vocab)

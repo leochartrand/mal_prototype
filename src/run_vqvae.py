@@ -35,7 +35,6 @@ for file in data_files:
         data.extend(part_trajs) 
         del part  # Free memory
         del part_trajs
-
 print(f"Total trajectories: {len(data)}, Total frames: {sum(len(traj) for traj in data)}")
 
 # Data split
@@ -96,13 +95,13 @@ for epoch in pbar:
     # Analyze embedding usage for this epoch
     all_indices = np.concatenate(epoch_encoding_indices)
     unique_embeddings = len(np.unique(all_indices))
-    embedding_counts = np.bincount(all_indices.flatten(), minlength=model.num_embeddings)
+    embedding_counts = np.bincount(all_indices.flatten(), minlength=model.codebook_size)
     embedding_usage = np.count_nonzero(embedding_counts)
     
     embedding_usage_history.append({
         'epoch': epoch,
         'unique_used': embedding_usage,
-        'total_embeddings': model.num_embeddings,
+        'total_embeddings': model.codebook_size,
         'usage_distribution': embedding_counts / np.sum(embedding_counts)  # Normalize
     })
     
@@ -125,7 +124,7 @@ for epoch in pbar:
 
     # Print progress
     pbar.set_postfix({'Train Loss': avg_train_loss, 'Test Loss': avg_test_loss, 
-                      'Embeddings Used': f"{unique_embeddings}/{model.num_embeddings}"})
+                      'Embeddings Used': f"{unique_embeddings}/{model.codebook_size}"})
     
     if avg_test_loss < best_loss:
         best_loss = avg_test_loss

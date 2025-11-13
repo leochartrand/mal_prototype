@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 
 from models.vqvae import VQ_VAE
 from models.pixelcnn import GatedPixelCNN
-from utils.nlp_utils import prepare_onehot_commands, encode_commands, decode_commands
+from utils.nlp_utils import prepare_fewhot_commands, encode_commands, decode_commands
 from utils.datasets import MultiModalDataset, augment_batch, resize_and_normalize_batch
 
 args = sys.argv
@@ -45,7 +45,7 @@ xt_data = torch.FloatTensor(np.array([x[1] for x in data])).permute(0,3,1,2) / 2
 
 
 commands_txt = [x[2] for x in data]  # list of strings
-commands, vocab, word2idx, idx2word = prepare_onehot_commands(commands_txt)
+commands, vocab, word2idx, idx2word = prepare_fewhot_commands(commands_txt)
 
 # Random split
 indices = torch.randperm(len(x0_data), generator=torch.Generator().manual_seed(42)) # For reproducibility
@@ -67,14 +67,14 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
 # Calculate actual conditioning size
-initial_cont_size = vqvae.embedding_dim * vqvae.discrete_size
+initial_cont_size = vqvae.codebook_embed_dim * vqvae.discrete_size
 command_size = len(vocab) 
 total_cond_size = initial_cont_size + command_size
 
 # Initialize PixelCNN model
 pixelcnn = GatedPixelCNN(
     vqvae=vqvae,
-    input_dim=vqvae.num_embeddings, 
+    input_dim=vqvae.codebook_size, 
     dim=params["model_params"]["dim"], 
     n_layers=params["model_params"]["n_layers"], 
     n_classes=total_cond_size, 

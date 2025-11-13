@@ -8,8 +8,8 @@ model_params:
   num_hiddens: 256
   num_residual_layers: 3
   num_residual_hiddens: 64
-  num_embeddings: 1024
-  embedding_dim: 8
+  codebook_size: 1024
+  codebook_embed_dim: 8
   commitment_cost: 0.25
   recon_weight: 1.0         # no modifs
   entropy_weight: 0.25       # not from the paper

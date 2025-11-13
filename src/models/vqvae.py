@@ -124,21 +124,21 @@ class Decoder(nn.Module):
 
 
 class VectorQuantizer(nn.Module):
-    def __init__(self, num_embeddings, embedding_dim, commitment_cost,
+    def __init__(self, codebook_size, codebook_embed_dim, commitment_cost,
             gaussion_prior=False):
         super(VectorQuantizer, self).__init__()
 
-        self._embedding_dim = embedding_dim
-        self._num_embeddings = num_embeddings
+        self._codebook_embed_dim = codebook_embed_dim
+        self._codebook_size = codebook_size
         self._embedding = nn.Embedding(
-            self._num_embeddings, self._embedding_dim)
+            self._codebook_size, self._codebook_embed_dim)
 
         if gaussion_prior:
             self._embedding.weight.data.normal_()
 
         else:
             self._embedding.weight.data.uniform_(
-                -1 / self._num_embeddings, 1 / self._num_embeddings)
+                -1 / self._codebook_size, 1 / self._codebook_size)
 
         self._commitment_cost = commitment_cost
 
@@ -148,7 +148,7 @@ class VectorQuantizer(nn.Module):
         input_shape = inputs.shape
 
         # Flatten input
-        flat_input = inputs.view(-1, self._embedding_dim)
+        flat_input = inputs.view(-1, self._codebook_embed_dim)
         # print("flat_input shape:", flat_input.shape)
 
         # Calculate distances
@@ -159,7 +159,7 @@ class VectorQuantizer(nn.Module):
         # Encoding
         encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)
         encodings = torch.zeros(
-            encoding_indices.shape[0], self._num_embeddings,
+            encoding_indices.shape[0], self._codebook_size,
             device=inputs.device)
         encodings.scatter_(1, encoding_indices, 1)
 
@@ -180,21 +180,21 @@ class VectorQuantizer(nn.Module):
 
 
 class VectorQuantizerEMA(nn.Module):
-    def __init__(self, num_embeddings, embedding_dim, commitment_cost, decay,
+    def __init__(self, codebook_size, codebook_embed_dim, commitment_cost, decay,
             epsilon=1e-5):
         super(VectorQuantizerEMA, self).__init__()
 
-        self._embedding_dim = embedding_dim
-        self._num_embeddings = num_embeddings
+        self._codebook_embed_dim = codebook_embed_dim
+        self._codebook_size = codebook_size
 
         self._embedding = nn.Embedding(
-            self._num_embeddings, self._embedding_dim)
+            self._codebook_size, self._codebook_embed_dim)
         self._embedding.weight.data.normal_()
         self._commitment_cost = commitment_cost
 
-        self.register_buffer('_ema_cluster_size', torch.zeros(num_embeddings))
+        self.register_buffer('_ema_cluster_size', torch.zeros(codebook_size))
         self._ema_w = nn.Parameter(torch.Tensor(
-            num_embeddings, self._embedding_dim))
+            codebook_size, self._codebook_embed_dim))
         self._ema_w.data.normal_()
 
         self._decay = decay
@@ -206,7 +206,7 @@ class VectorQuantizerEMA(nn.Module):
         input_shape = inputs.shape
 
         # Flatten input
-        flat_input = inputs.view(-1, self._embedding_dim)
+        flat_input = inputs.view(-1, self._codebook_embed_dim)
 
         # Calculate distances
         distances = (torch.sum(flat_input ** 2, dim=1, keepdim=True)
@@ -216,7 +216,7 @@ class VectorQuantizerEMA(nn.Module):
         # Encoding
         encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)
         encodings = torch.zeros(
-            encoding_indices.shape[0], self._num_embeddings,
+            encoding_indices.shape[0], self._codebook_size,
             device=inputs.device)
         encodings.scatter_(1, encoding_indices, 1)
 
@@ -233,7 +233,7 @@ class VectorQuantizerEMA(nn.Module):
             n = torch.sum(self._ema_cluster_size.data)
             self._ema_cluster_size = (
                     (self._ema_cluster_size + self._epsilon)
-                    / (n + self._num_embeddings * self._epsilon) * n)
+                    / (n + self._codebook_size * self._epsilon) * n)
 
             dw = torch.matmul(encodings.t(), flat_input)
             self._ema_w = nn.Parameter(
@@ -261,13 +261,13 @@ class VectorQuantizerEMA(nn.Module):
 class VQ_VAE(nn.Module):
     def __init__(
             self,
-            embedding_dim=5,
+            codebook_embed_dim=5,
             input_channels=3,
             output_channels=3,
             num_hiddens=128,
             num_residual_layers=3,
             num_residual_hiddens=64,
-            num_embeddings=512,
+            codebook_size=512,
             commitment_cost=0.25,
             recon_weight=0.1,
             entropy_weight=0.01,
@@ -276,18 +276,18 @@ class VQ_VAE(nn.Module):
             ignore_background=False):
         super(VQ_VAE, self).__init__()
         self.imsize = imsize
-        self.embedding_dim = embedding_dim
+        self.codebook_embed_dim = codebook_embed_dim
         self.pixel_cnn = None
         self.input_channels = input_channels
         self.imlength = imsize * imsize * input_channels
-        self.num_embeddings = num_embeddings
+        self.codebook_size = codebook_size
 
         self._encoder = Encoder(input_channels, num_hiddens,
             num_residual_layers,
             num_residual_hiddens)
 
         self._pre_vq_conv = nn.Conv2d(in_channels=num_hiddens,
-            out_channels=self.embedding_dim,
+            out_channels=self.codebook_embed_dim,
             kernel_size=1,
             stride=1)
         
@@ -297,14 +297,14 @@ class VQ_VAE(nn.Module):
         self.ignore_background = ignore_background
 
         if decay > 0.0:
-            self._vq_vae = VectorQuantizerEMA(num_embeddings,
-                self.embedding_dim,
+            self._vq_vae = VectorQuantizerEMA(codebook_size,
+                self.codebook_embed_dim,
                 commitment_cost, decay)
         else:
-            self._vq_vae = VectorQuantizer(num_embeddings, self.embedding_dim,
+            self._vq_vae = VectorQuantizer(codebook_size, self.codebook_embed_dim,
                 commitment_cost)
 
-        self._decoder = Decoder(self.embedding_dim,
+        self._decoder = Decoder(self.codebook_embed_dim,
             num_hiddens,
             num_residual_layers,
             num_residual_hiddens, 
@@ -327,7 +327,7 @@ class VQ_VAE(nn.Module):
             raise ValueError(imsize)
 
         self.discrete_size = self.root_len * self.root_len
-        self.representation_size = self.discrete_size * self.embedding_dim
+        self.representation_size = self.discrete_size * self.codebook_embed_dim
         # Calculate latent sizes
 
     def compute_loss(self, inputs):
@@ -372,14 +372,14 @@ class VQ_VAE(nn.Module):
         more than it forces high entropy (uniform usage of all embeddings).
         """
         # Codebook usage probabilities
-        avg_probs = torch.zeros(self.num_embeddings, device=inputs.device)
+        avg_probs = torch.zeros(self.codebook_size, device=inputs.device)
         unique_indices, counts = torch.unique(encoding_indices, return_counts=True)
         avg_probs[unique_indices] = counts.float()
         avg_probs = avg_probs / torch.sum(avg_probs)
 
         # Normalized squared entropy
         entropy = -torch.sum(avg_probs * torch.log(avg_probs + 1e-10))
-        max_entropy = np.log(self.num_embeddings)
+        max_entropy = np.log(self.codebook_size)
         entropy_loss = (1 - (entropy / max_entropy))**2 * self.entropy_weight
         return entropy_loss
 
@@ -407,10 +407,10 @@ class VQ_VAE(nn.Module):
 
     def discrete_to_cont(self, e_indices):
         e_indices = self.latent_to_square(e_indices)
-        input_shape = e_indices.shape + (self.embedding_dim,)
+        input_shape = e_indices.shape + (self.codebook_embed_dim,)
         e_indices = e_indices.reshape(-1).unsqueeze(1)
 
-        min_encodings = torch.zeros(e_indices.shape[0], self.num_embeddings,
+        min_encodings = torch.zeros(e_indices.shape[0], self.codebook_size,
             device=e_indices.device)
         min_encodings.scatter_(1, e_indices, 1)
 
@@ -449,7 +449,7 @@ class VQ_VAE(nn.Module):
 
     def decode(self, latents, cont=True):
         if cont:
-            z_q = latents.reshape(-1, self.embedding_dim, self.root_len,
+            z_q = latents.reshape(-1, self.codebook_embed_dim, self.root_len,
                 self.root_len)
         else:
             z_q = self.discrete_to_cont(latents)

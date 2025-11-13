@@ -1,0 +1,24 @@
+# Arguments for a VQ-VAE model trained on the val dataset.
+dataset_path: "data/val_full/"
+model_path: "models/vqllama16/model.pt"
+results_path: "results/vqllama16/"
+model_params:
+  codebook_size: 4096
+  codebook_embed_dim: 8
+  codebook_l2_norm: True
+  codebook_show_usage: True
+  commitment_loss_weight: 0.25 
+  diversity_loss_weight: 0.1
+  confidence_loss_weight: 0.001
+  entropy_temperature: 0.01
+  encoder_ch_mult: [1, 1, 2, 2, 4]
+  decoder_ch_mult: [1, 1, 2, 2, 4]
+  channels: 32
+  z_channels: 64
+  dropout_p: 0.0
+imsize: 128
+recon_loss_weight: 1.0        
+batch_size: 32
+num_epochs: 300
+lr: 3e-4
+weight_decay: 1e-5

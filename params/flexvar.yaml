@@ -1,0 +1,30 @@
+dataset_path: "data/val_data.pkl"
+model_path: "models/flexvar/model.pt"
+results_path: "results/flexvar/"
+model_params:
+  patch_nums: [1, 2, 4, 8, 16]
+  depth: 16 
+  token_dropout_p: 0.05
+  flash_if_available: False
+  fused_if_available: False
+vq_llama: 
+  model_path: "models/flexvae1/model.pt"
+  model_params:
+    codebook_size: 4096
+    codebook_embed_dim: 8
+    codebook_l2_norm: True
+    codebook_show_usage: True
+    commitment_loss_weight: 0.25 
+    diversity_loss_weight: 0.1
+    confidence_loss_weight: 0.001
+    entropy_temperature: 0.01
+    encoder_ch_mult: [1, 2, 2, 4]
+    decoder_ch_mult: [1, 2, 2, 4]
+    channels: 32
+    z_channels: 64
+    dropout_p: 0.0
+imsize: 128
+batch_size: 8
+num_epochs: 300
+lr: 3e-4
+weight_decay: 1e-5

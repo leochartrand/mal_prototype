@@ -8,7 +8,8 @@ import yaml
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-from models.vqvae import VQ_VAE
+# from models.vqvae import VQ_VAE
+from models.vq_llama import VQModel as VQ_VAE
 from utils.datasets import MultiModalDataset, resize_and_normalize_batch
 
 args = sys.argv
@@ -17,10 +18,10 @@ if len(args) > 1:
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-vqvae = VQ_VAE(**params["model_params"])
-vqvae.load_state_dict(torch.load(params["model_path"], weights_only=True))
-vqvae = vqvae.to(device)
-vqvae.eval()
+model = VQ_VAE(**params["model_params"])
+model.load_state_dict(torch.load(params["model_path"], weights_only=True), strict=True)
+model = model.to(device)
+model.eval()
 
 # Load and process data
 print("Loading and processing data...")
@@ -54,16 +55,16 @@ batch_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
 dz = []
 commands = []
+size=(params["imsize"], params["imsize"])  # Image size for resizing
 
 with torch.no_grad():
     for x0, xt, c, in tqdm(batch_loader, leave=False, desc=f"Encoding examples"):
         
-        x0 = resize_and_normalize_batch(x0.to(device), size=(vqvae.imsize, vqvae.imsize))
-        xt = resize_and_normalize_batch(xt.to(device), size=(vqvae.imsize, vqvae.imsize))
-        outputs_0, _ = vqvae.compute_loss(x0)
-        outputs_t, _ = vqvae.compute_loss(xt)
-        z0 = outputs_0["quantized"]
-        zt = outputs_t["quantized"]
+        x0 = resize_and_normalize_batch(x0.to(device), size=size)
+        xt = resize_and_normalize_batch(xt.to(device), size=size)
+        # outputs_0, _ = model.compute_loss(x0)
+        _, _, z0 = model.forward(x0, v_patch_nums=None)
+        _, _, zt = model.forward(xt, v_patch_nums=None)
 
         dz_batch = zt - z0  # [N, C, H, W]
 

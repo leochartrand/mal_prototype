@@ -10,9 +10,9 @@ import yaml
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-from vqvae import VQ_VAE
+from models.vqvae import VQ_VAE
 from pixelcnn_baseline import GatedPixelCNN
-from datasets import augment_batch, resize_and_normalize_batch
+from utils.datasets import augment_batch, resize_and_normalize_batch
 
 args = sys.argv
 if len(args) > 1:
@@ -60,11 +60,11 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
 # Calculate actual conditioning size
-total_cond_size = vqvae.embedding_dim * vqvae.discrete_size
+total_cond_size = vqvae.codebook_embed_dim * vqvae.discrete_size
 
 # Initialize PixelCNN model
 pixelcnn = GatedPixelCNN(
-    input_dim=vqvae.num_embeddings, 
+    input_dim=vqvae.codebook_size, 
     dim=params["model_params"]["dim"], 
     n_layers=params["model_params"]["n_layers"], 
     n_classes=total_cond_size, 
@@ -116,7 +116,7 @@ def resize_and_encode_batch(x0, xt):
 def compute_loss(z0, zt):
 
     root_len = vqvae.root_len
-    num_embeddings = vqvae.num_embeddings
+    codebook_size = vqvae.codebook_size
 
     # Data shape: [batch, input stack, input size]
     z0 = z0.long()  
@@ -130,7 +130,7 @@ def compute_loss(z0, zt):
     logits = logits.permute(0, 2, 3, 1).contiguous()
 
     loss = criterion(
-        logits.view(-1, num_embeddings),
+        logits.view(-1, codebook_size),
         zt.contiguous().view(-1)
     )
     return loss    

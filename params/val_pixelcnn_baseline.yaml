@@ -12,8 +12,8 @@ vqvae:
     num_hiddens: 128
     num_residual_layers: 3
     num_residual_hiddens: 64
-    num_embeddings: 512
-    embedding_dim: 5
+    codebook_size: 512
+    codebook_embed_dim: 5
     commitment_cost: 0.25
     recon_weight: 1.0         # no modifs
     entropy_weight: 0.0       # not from the paper
