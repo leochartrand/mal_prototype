@@ -11,7 +11,7 @@ import sys
 import os
 
 from models.vq_llama import VQModel
-from utils.datasets import FrameDataset, augment_batch, resize_and_normalize_batch
+from utils.datasets import FrameDataset
 
 torch.cuda.empty_cache()
 
@@ -19,6 +19,7 @@ args = sys.argv
 if len(args) > 1:
     params = yaml.safe_load(open("./params/"+args[1], 'r'))
 
+dataset_path = params["dataset_path"]
 model_path = params["model_path"]
 if not os.path.exists(os.path.dirname(model_path)):
     os.makedirs(os.path.dirname(model_path))
@@ -28,20 +29,17 @@ if not os.path.exists(os.path.dirname(results_path)):
 
 size=(params["imsize"], params["imsize"])  # Image size for resizing
 
-# Create visualization directory
-os.makedirs('vis/mal', exist_ok=True)
-
 print("Loading and processing data...")
-data_files = sorted(glob.glob("data/val_full/*.pkl"))  # Adjust path/pattern as needed
+data_files = sorted(glob.glob(f"{dataset_path}/*.pkl"))  # Adjust path/pattern as needed
 data = []
-for file in data_files:
+for file in tqdm(data_files):
     with open(file, 'rb') as f:
         part = pickle.load(f)
         # Each frame to float tensor, concat at dim 0, list of frames to float tensor traj
-        part_trajs = [torch.FloatTensor(np.array(traj)).permute(0,3,1,2) / 255.0 for traj in part]
-        data.extend(part_trajs) 
+        # part_trajs = [torch.FloatTensor(np.array(traj)).permute(0,3,1,2) / 255.0 for traj in part]
+        data.extend(part) 
         del part  # Free memory
-        del part_trajs
+        # del part_trajs
 print(f"Total trajectories: {len(data)}, Total frames: {sum(len(traj) for traj in data)}")
 
 # Data split
@@ -147,7 +145,8 @@ for epoch in pbar:
     
     pbar2 = tqdm(train_loader, leave=False, desc=f"Epoch {epoch}: Training")
     for data in pbar2:
-        data = augment_batch(data.to(device), size=size)
+        # data = augment_batch(data.to(device), size=size)
+        data = data.to(device)
 
         # Forward pass returns (dec, diff, quant)
         # When v_patch_nums is used, diff is a list of (codebook_loss, commit_loss, diversity_loss, confidence_loss, codebook_usage) tuples
@@ -206,7 +205,8 @@ for epoch in pbar:
     total_test_loss = 0
     with torch.no_grad():
         for data in tqdm(test_loader, leave=False, desc=f"Epoch {epoch} Validation"):
-            data = resize_and_normalize_batch(data.to(device), size=size)
+            # data = resize_and_normalize_batch(data.to(device), size=size)
+            data = data.to(device)
             
             # Forward pass returns (dec, diff_list, quant)
             recon_frames, diff_list, _ = model.forward(data, v_patch_nums=patch_nums)
@@ -238,7 +238,8 @@ for epoch in pbar:
     with torch.no_grad():
         # Get a batch from test loader
         sample_frames = next(iter(test_loader)).to(device)
-        frames = resize_and_normalize_batch(sample_frames, size=size)
+        # frames = resize_and_normalize_batch(sample_frames, size=size)
+        frames = sample_frames
         
         # Reconstruct - returns list of reconstructions at different scales
         sample_recons, _, _ = model.forward(frames, v_patch_nums=patch_nums)
@@ -264,7 +265,7 @@ for epoch in pbar:
             axes[1, i].axis('off')
         
         plt.tight_layout()
-        plt.savefig(f'vis/mal/epoch_{epoch+1:03d}_reconstruction.png', dpi=100, bbox_inches='tight')
+        plt.savefig(f'{results_path}epoch_{epoch+1:03d}_reconstruction.png', dpi=100, bbox_inches='tight')
         plt.close()
     
     # Update scheduler
@@ -304,15 +305,16 @@ plt.ylabel('Loss')
 plt.title('VQ-VAE Finetuning Loss')
 plt.legend()
 plt.grid(True)
-plt.savefig('results/vqllama16/flexvae_finetuning_loss.png')
+plt.savefig(results_path + 'flexvae_finetuning_loss.png')
 plt.show()
 
-model.eval
+model.eval()
 
 # Visualize some reconstructions and associated latent codes
 data_iter = iter(test_loader)
 viz_data = next(data_iter)  # Note the comma after data
-viz_data = resize_and_normalize_batch(viz_data.to(device), size=size)
+# viz_data = resize_and_normalize_batch(viz_data.to(device), size=size)
+viz_data = viz_data.to(device)
 
 with torch.no_grad():
     recons, _, _ = model.forward(viz_data, v_patch_nums=patch_nums)
