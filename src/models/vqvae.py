@@ -14,9 +14,14 @@ import torch
 import numpy as np
 from torch import nn
 from torch.nn import functional as F
-import utils.pytorch_util as ptu
 import torch.nn as nn
 import torch.nn.functional as F
+
+def from_numpy(*args, **kwargs):
+    return torch.from_numpy(*args, **kwargs).float().to(device)
+
+def get_numpy(tensor):
+    return tensor.to('cpu').detach().numpy()
 
 class Residual(nn.Module):
     def __init__(self, in_channels, num_hiddens, num_residual_hiddens):
@@ -426,7 +431,7 @@ class VQ_VAE(nn.Module):
     def sample_conditional_indices(self, batch_size, cond):
         if cond.shape[0] == 1:
             cond = cond.repeat(batch_size, axis=0)
-        cond = ptu.from_numpy(cond)
+        cond = from_numpy(cond)
 
         sampled_indices = self.pixel_cnn.generate(
             shape=(self.root_len, self.root_len),
@@ -445,7 +450,7 @@ class VQ_VAE(nn.Module):
 
         sampled_indices = sampled_indices.reshape(batch_size, self.discrete_size)
         z_q = self.discrete_to_cont(sampled_indices).reshape(-1, self.representation_size)
-        return ptu.get_numpy(z_q)
+        return get_numpy(z_q)
 
     def decode(self, latents, cont=True):
         if cont:
@@ -457,16 +462,16 @@ class VQ_VAE(nn.Module):
         return self._decoder(z_q)
 
     def encode_one_np(self, inputs, cont=True):
-        return ptu.get_numpy(self.encode(ptu.from_numpy(inputs), cont=cont))[0]
+        return get_numpy(self.encode(from_numpy(inputs), cont=cont))[0]
 
     def encode_np(self, inputs, cont=True):
-        return ptu.get_numpy(self.encode(ptu.from_numpy(inputs), cont=cont))
+        return get_numpy(self.encode(from_numpy(inputs), cont=cont))
 
     def decode_one_np(self, inputs, cont=True):
-        return np.clip(ptu.get_numpy(
-            self.decode(ptu.from_numpy(inputs).reshape(1, -1), cont=cont))[0],
+        return np.clip(get_numpy(
+            self.decode(from_numpy(inputs).reshape(1, -1), cont=cont))[0],
             0, 1)
 
     def decode_np(self, inputs, cont=True):
         return np.clip(
-            ptu.get_numpy(self.decode(ptu.from_numpy(inputs), cont=cont)), 0, 1)
+            get_numpy(self.decode(from_numpy(inputs), cont=cont)), 0, 1)

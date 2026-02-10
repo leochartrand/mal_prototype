@@ -6,6 +6,8 @@ from torch.nn import functional as F
 def sample_with_top_k_top_p_(logits_BlV: torch.Tensor, top_k: int = 0, top_p: float = 0.0, rng=None, num_samples=1) -> torch.Tensor:  # return idx, shaped (B, l)
     B, l, V = logits_BlV.shape
     if top_k > 0:
+        # Clamp top_k to vocabulary size to avoid index out of range
+        top_k = min(top_k, V)
         idx_to_remove = logits_BlV < logits_BlV.topk(top_k, largest=True, sorted=False, dim=-1)[0].amin(dim=-1, keepdim=True)
         logits_BlV.masked_fill_(idx_to_remove, -torch.inf)
     if top_p > 0:

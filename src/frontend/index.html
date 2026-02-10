@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Training Monitor</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- Progress Bars Section -->
+        <div class="progress-section">
+            <div class="progress-container">
+                <div class="progress-label">
+                    <span>Epoch Progress</span>
+                    <span id="epoch-text">0/0</span>
+                </div>
+                <div class="progress-bar">
+                    <div id="epoch-progress" class="progress-fill"></div>
+                </div>
+            </div>
+            <div class="progress-container">
+                <div class="progress-label">
+                    <span id="batch-label">Batch Progress</span>
+                    <span id="batch-text">0/0</span>
+                </div>
+                <div class="progress-bar">
+                    <div id="batch-progress" class="progress-fill"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 4x4 Grid -->
+        <div class="grid-container">
+            <!-- Loss Graph with table below -->
+            <div class="grid-item graph-item">
+                <h3>Loss Over Time</h3>
+                <canvas id="loss-chart"></canvas>
+                <div class="loss-table-compact">
+                    <h4>Current Losses</h4>
+                    <table id="loss-table">
+                        <thead>
+                            <tr id="loss-table-header">
+                                <th>Type</th>
+                                <th>Total</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr id="train-loss-row">
+                                <td><strong>Train</strong></td>
+                                <td>-</td>
+                            </tr>
+                            <tr id="val-loss-row">
+                                <td><strong>Val</strong></td>
+                                <td>-</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Visual Outputs -->
+            <div class="grid-item visual-item visual-large">
+                <h3>Visual Outputs</h3>
+                <div id="visual-grid" class="visual-grid"></div>
+            </div>
+
+            <!-- Parameters -->
+            <div class="grid-item params-item">
+                <h3>Model Parameters</h3>
+                <div id="params-container" class="params-container">
+                    <p class="loading">Loading parameters...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

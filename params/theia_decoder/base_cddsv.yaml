@@ -1,0 +1,20 @@
+# Arguments for a VQ-VAE model trained on the val dataset.
+dataset_path: "../../../mnt/sda1/Datasets/chal2525/mmap_data/"
+decoder_dataset_path: "../../../mnt/sda1/Datasets/chal2525/mmap_dec/"
+model_path: "models/theia_decoder/base_cddsv/model.pt"
+results_path: "results/theia_decoder/base_cddsv/"
+
+# Vision model name (must match filenames in decoder_dataset_path)
+vision_model: "theia_base_cddsv"
+model_params:
+  ch_mult: [1, 1, 2, 2, 4]
+  channels: 64
+  z_channels: 128
+  dropout: 0.0
+  theia_dim: 768
+patch_nums: [1, 2, 4, 8, 16]
+imsize: 128     
+batch_size: 32
+num_epochs: 30
+lr: 3e-4
+weight_decay: 1e-5
