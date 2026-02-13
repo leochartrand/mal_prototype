@@ -200,6 +200,7 @@ class AffordanceFlowDiT(nn.Module):
         mlp_ratio: MLP hidden dim multiplier
         dropout: Dropout rate
         cond_drop_prob: Probability of dropping text conditioning for CFG training
+        context_drop_prob: Probability of dropping context (z_init) conditioning for two-scale CFG
     """
     def __init__(
         self,
@@ -209,10 +210,11 @@ class AffordanceFlowDiT(nn.Module):
         depth: int = 6,
         num_heads: int = 6,
         text_dim: int = 768,
-        max_text_len: int = 77,
+        max_text_len: int = 25,
         mlp_ratio: float = 4.0,
         dropout: float = 0.0,
         cond_drop_prob: float = 0.1,
+        context_drop_prob: float = 0.1,
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -220,6 +222,7 @@ class AffordanceFlowDiT(nn.Module):
         self.hidden_dim = hidden_dim
         self.depth = depth
         self.cond_drop_prob = cond_drop_prob
+        self.context_drop_prob = context_drop_prob
         self.max_text_len = max_text_len
         
         # Input projections
@@ -236,8 +239,11 @@ class AffordanceFlowDiT(nn.Module):
         # Text projection for cross-attention context
         self.text_proj = TextProjector(text_dim, hidden_dim)
         
-        # Null text embedding for CFG
+        # Null text embedding for CFG (text dropped)
         self.null_text_emb = nn.Parameter(torch.zeros(1, 1, hidden_dim))
+        
+        # Null context embedding for two-scale CFG (context/z_init dropped)
+        self.null_context_emb = nn.Parameter(torch.zeros(1, num_patches, hidden_dim))
         
         # Transformer blocks with cross-attention
         self.blocks = nn.ModuleList([
@@ -255,7 +261,7 @@ class AffordanceFlowDiT(nn.Module):
         self._init_weights()
         
         n_params = sum(p.numel() for p in self.parameters())
-        print(f"AffordanceFlowDiT (cross-attn) initialized with {n_params/1e6:.2f}M parameters")
+        print(f"FlowDiT initialized with {n_params/1e6:.2f}M parameters")
 
     def _init_weights(self):
         """Initialize weights with DiT-specific initialization."""
@@ -294,7 +300,8 @@ class AffordanceFlowDiT(nn.Module):
         z_init: torch.Tensor,
         text_emb: torch.Tensor,
         text_mask: Optional[torch.Tensor] = None,
-        drop_cond: Optional[torch.Tensor] = None,
+        drop_text: Optional[torch.Tensor] = None,
+        drop_context: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Forward pass predicting velocity field.
@@ -305,7 +312,8 @@ class AffordanceFlowDiT(nn.Module):
             z_init: Initial observation latents [B, N, D]
             text_emb: Per-token text hidden states [B, seq_len, text_dim]
             text_mask: Attention mask [B, seq_len], 1=real 0=padding
-            drop_cond: Optional mask for dropping conditioning [B]
+            drop_text: Optional bool mask for dropping text conditioning [B]
+            drop_context: Optional bool mask for dropping context conditioning [B]
         
         Returns:
             Predicted velocity [B, N, D]
@@ -315,6 +323,17 @@ class AffordanceFlowDiT(nn.Module):
         # Project inputs
         h_target = self.input_proj(z_t) + self.pos_embed_target
         h_init = self.init_proj(z_init) + self.pos_embed_init
+        
+        # Two-scale CFG: independently drop context (z_init) during training
+        if self.training and self.context_drop_prob > 0:
+            if drop_context is None:
+                drop_context = torch.rand(B, device=z_t.device) < self.context_drop_prob
+            null_ctx_init = self.null_context_emb.expand(B, -1, -1)  # [B, N, D]
+            h_init = torch.where(
+                drop_context.view(B, 1, 1),
+                null_ctx_init,
+                h_init,
+            )
         
         # Concatenate init and target for self-attention
         h = torch.cat([h_init, h_target], dim=1)  # [B, 2*N, D]
@@ -331,20 +350,20 @@ class AffordanceFlowDiT(nn.Module):
         else:
             text_key_padding_mask = None
         
-        # CFG: randomly drop text during training
+        # Two-scale CFG: independently drop text during training
         if self.training and self.cond_drop_prob > 0:
-            if drop_cond is None:
-                drop_cond = torch.rand(B, device=z_t.device) < self.cond_drop_prob
+            if drop_text is None:
+                drop_text = torch.rand(B, device=z_t.device) < self.cond_drop_prob
             null_ctx = self.null_text_emb.expand(B, text_ctx.shape[1], -1)
             text_ctx = torch.where(
-                drop_cond.view(B, 1, 1),
+                drop_text.view(B, 1, 1),
                 null_ctx,
                 text_ctx
             )
             # For dropped samples, unmask all positions (attend to null tokens)
             if text_key_padding_mask is not None:
                 text_key_padding_mask = torch.where(
-                    drop_cond.view(B, 1),
+                    drop_text.view(B, 1),
                     torch.zeros_like(text_key_padding_mask),  # False = attend
                     text_key_padding_mask
                 )
@@ -375,22 +394,34 @@ class AffordanceFlowDiT(nn.Module):
         text_mask: Optional[torch.Tensor] = None,
         num_steps: int = 50,
         cfg_scale: float = 1.0,
+        context_cfg_scale: Optional[float] = None,
+        prompt_cfg_scale: Optional[float] = None,
     ) -> torch.Tensor:
         """
-        Sample using Euler method.
+        Sample using Euler method with optional two-scale CFG.
+        
+        Two-scale CFG (when context_cfg_scale and prompt_cfg_scale are provided):
+            v = v_uncond + context_w * (v_context - v_uncond) + prompt_w * (v_full - v_context)
+        where v_uncond has both signals dropped, v_context has only text dropped,
+        and v_full has both signals active.
+        
+        Falls back to single-scale CFG when only cfg_scale is provided.
         
         Args:
             z_init: Initial observation latents [B, N, D]
             text_emb: Per-token text hidden states [B, seq_len, text_dim]
             text_mask: Attention mask [B, seq_len], 1=real 0=padding
             num_steps: Number of Euler steps
-            cfg_scale: Classifier-free guidance scale
+            cfg_scale: Single-scale CFG weight (used when two-scale params are None)
+            context_cfg_scale: Two-scale CFG weight for context (spatial fidelity)
+            prompt_cfg_scale: Two-scale CFG weight for text prompt (instruction following)
         
         Returns:
             Sampled target latents [B, N, D]
         """
         B = z_init.shape[0]
         device = z_init.device
+        use_two_scale = context_cfg_scale is not None and prompt_cfg_scale is not None
         
         # Start from noise
         z = torch.randn_like(z_init)
@@ -410,12 +441,20 @@ class AffordanceFlowDiT(nn.Module):
         for i in range(num_steps):
             t = torch.ones(B, device=device) * (1.0 - i * dt)
             
-            if cfg_scale != 1.0:
-                # Conditional prediction
+            if use_two_scale:
+                # Three-pass two-scale CFG
+                # 1) Fully unconditional: both context and text dropped
+                v_uncond = self._forward_with_ctx(z, t, z_init, null_text_ctx, None, use_null_context=True)
+                # 2) Context only: real z_init, text dropped
+                v_context = self._forward_with_ctx(z, t, z_init, null_text_ctx, None, use_null_context=False)
+                # 3) Fully conditioned: real z_init, real text
+                v_full = self._forward_with_ctx(z, t, z_init, text_ctx, text_kpm, use_null_context=False)
+                # Two-scale guided velocity
+                v = v_uncond + context_cfg_scale * (v_context - v_uncond) + prompt_cfg_scale * (v_full - v_context)
+            elif cfg_scale != 1.0:
+                # Single-scale CFG (text only, legacy behavior)
                 v_cond = self._forward_with_ctx(z, t, z_init, text_ctx, text_kpm)
-                # Unconditional prediction (null context, no masking)
                 v_uncond = self._forward_with_ctx(z, t, z_init, null_text_ctx, None)
-                # CFG combination
                 v = v_uncond + cfg_scale * (v_cond - v_uncond)
             else:
                 v = self._forward_with_ctx(z, t, z_init, text_ctx, text_kpm)
@@ -431,18 +470,37 @@ class AffordanceFlowDiT(nn.Module):
         z_init: torch.Tensor,
         text_ctx: torch.Tensor,
         text_key_padding_mask: Optional[torch.Tensor] = None,
+        use_null_context: bool = False,
     ) -> torch.Tensor:
-        """Forward pass with pre-computed text context."""
+        """Forward pass with pre-computed text context.
+        
+        Args:
+            z_t: Noisy target latents [B, N, D]
+            t: Timesteps [B]
+            z_init: Initial observation latents [B, N, D]
+            text_ctx: Pre-projected text context [B, seq_len, hidden_dim]
+            text_key_padding_mask: Bool mask [B, seq_len], True = padding
+            use_null_context: If True, replace context tokens with learned null embedding
+        """
         B = z_t.shape[0]
         
         h_target = self.input_proj(z_t) + self.pos_embed_target
-        h_init = self.init_proj(z_init) + self.pos_embed_init
+        if use_null_context:
+            h_init = self.null_context_emb.expand(B, -1, -1)
+        else:
+            h_init = self.init_proj(z_init) + self.pos_embed_init
         h = torch.cat([h_init, h_target], dim=1)
         
         t_emb = self.time_embed(t)
         
         for block in self.blocks:
-            h = block(h, t_emb, text_ctx, text_key_padding_mask)
+            if self.gradient_checkpointing and self.training:
+                h = torch.utils.checkpoint.checkpoint(
+                    block, h, t_emb, text_ctx, text_key_padding_mask,
+                    use_reentrant=False
+                )
+            else:
+                h = block(h, t_emb, text_ctx, text_key_padding_mask)
         
         h_target_out = h[:, self.num_patches:, :]
         v = self.final_layer(h_target_out, t_emb)
@@ -456,10 +514,12 @@ class AffordanceFlowDiT(nn.Module):
         text_emb: torch.Tensor,
         text_mask: Optional[torch.Tensor] = None,
         cfg_scale: float = 1.0,
+        context_cfg_scale: Optional[float] = None,
+        prompt_cfg_scale: Optional[float] = None,
         atol: float = 1e-5,
         rtol: float = 1e-5,
     ) -> torch.Tensor:
-        """Sample using adaptive ODE solver (dopri5)."""
+        """Sample using adaptive ODE solver (dopri5) with optional two-scale CFG."""
         try:
             from torchdiffeq import odeint
         except ImportError:
@@ -467,6 +527,7 @@ class AffordanceFlowDiT(nn.Module):
         
         B = z_init.shape[0]
         device = z_init.device
+        use_two_scale = context_cfg_scale is not None and prompt_cfg_scale is not None
         
         text_ctx = self.text_proj(text_emb)  # [B, seq_len, D]
         if text_mask is not None:
@@ -478,7 +539,12 @@ class AffordanceFlowDiT(nn.Module):
         def ode_fn(t_scalar, z):
             t = torch.ones(B, device=device) * t_scalar
             
-            if cfg_scale != 1.0:
+            if use_two_scale:
+                v_uncond = self._forward_with_ctx(z, t, z_init, null_text_ctx, None, use_null_context=True)
+                v_context = self._forward_with_ctx(z, t, z_init, null_text_ctx, None, use_null_context=False)
+                v_full = self._forward_with_ctx(z, t, z_init, text_ctx, text_kpm, use_null_context=False)
+                v = v_uncond + context_cfg_scale * (v_context - v_uncond) + prompt_cfg_scale * (v_full - v_context)
+            elif cfg_scale != 1.0:
                 v_cond = self._forward_with_ctx(z, t, z_init, text_ctx, text_kpm)
                 v_uncond = self._forward_with_ctx(z, t, z_init, null_text_ctx, None)
                 v = v_uncond + cfg_scale * (v_cond - v_uncond)
@@ -492,6 +558,73 @@ class AffordanceFlowDiT(nn.Module):
         solution = odeint(ode_fn, z0, t_span, atol=atol, rtol=rtol, method='dopri5')
         
         return solution[1]
+
+    def generate_fixed_steps(
+        self,
+        z_init: torch.Tensor,
+        text_emb: torch.Tensor,
+        text_mask: Optional[torch.Tensor] = None,
+        num_steps: int = 4,
+        cfg_scale: float = 1.0,
+        context_cfg_scale: Optional[float] = None,
+        prompt_cfg_scale: Optional[float] = None,
+    ) -> torch.Tensor:
+        """
+        Fixed-step Euler generation WITH gradient tracking.
+        Used during adversarial training so discriminator gradients
+        flow back through the generation process to update FlowDiT.
+
+        Unlike sample_euler, this has NO @torch.no_grad() decorator.
+        Supports two-scale CFG when context_cfg_scale and prompt_cfg_scale are provided.
+
+        Args:
+            z_init: Initial observation latents [B, N, D] (already scaled)
+            text_emb: Per-token text hidden states [B, seq_len, text_dim]
+            text_mask: Attention mask [B, seq_len], 1=real 0=padding
+            num_steps: Number of fixed Euler steps (default 4)
+            cfg_scale: Single-scale CFG weight (used when two-scale params are None)
+            context_cfg_scale: Two-scale CFG weight for context (spatial fidelity)
+            prompt_cfg_scale: Two-scale CFG weight for text prompt (instruction following)
+
+        Returns:
+            Generated goal latents [B, N, D] with full gradient graph
+        """
+        B = z_init.shape[0]
+        device = z_init.device
+        use_two_scale = context_cfg_scale is not None and prompt_cfg_scale is not None
+
+        # Start from noise
+        z = torch.randn_like(z_init)
+
+        # Prepare text context (with gradients — text_proj is part of FlowDiT)
+        text_ctx = self.text_proj(text_emb)
+        if text_mask is not None:
+            text_kpm = (text_mask == 0)
+        else:
+            text_kpm = None
+
+        null_text_ctx = self.null_text_emb.expand(B, text_ctx.shape[1], -1)
+
+        dt = 1.0 / num_steps
+
+        for i in range(num_steps):
+            t = torch.ones(B, device=device) * (1.0 - i * dt)
+
+            if use_two_scale:
+                v_uncond = self._forward_with_ctx(z, t, z_init, null_text_ctx, None, use_null_context=True)
+                v_context = self._forward_with_ctx(z, t, z_init, null_text_ctx, None, use_null_context=False)
+                v_full = self._forward_with_ctx(z, t, z_init, text_ctx, text_kpm, use_null_context=False)
+                v = v_uncond + context_cfg_scale * (v_context - v_uncond) + prompt_cfg_scale * (v_full - v_context)
+            elif cfg_scale != 1.0:
+                v_cond = self._forward_with_ctx(z, t, z_init, text_ctx, text_kpm)
+                v_uncond = self._forward_with_ctx(z, t, z_init, null_text_ctx, None)
+                v = v_uncond + cfg_scale * (v_cond - v_uncond)
+            else:
+                v = self._forward_with_ctx(z, t, z_init, text_ctx, text_kpm)
+
+            z = z - v * dt
+
+        return z
 
 
 def flow_matching_loss(

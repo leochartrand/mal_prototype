@@ -32,42 +32,17 @@
         </div>
 
         <!-- 4x4 Grid -->
-        <div class="grid-container">
-            <!-- Loss Graph with table below -->
-            <div class="grid-item graph-item">
-                <h3>Loss Over Time</h3>
-                <canvas id="loss-chart"></canvas>
-                <div class="loss-table-compact">
-                    <h4>Current Losses</h4>
-                    <table id="loss-table">
-                        <thead>
-                            <tr id="loss-table-header">
-                                <th>Type</th>
-                                <th>Total</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr id="train-loss-row">
-                                <td><strong>Train</strong></td>
-                                <td>-</td>
-                            </tr>
-                            <tr id="val-loss-row">
-                                <td><strong>Val</strong></td>
-                                <td>-</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+        <div class="grid-container" id="grid-container">
+            <!-- Dynamic chart sections injected here by JS -->
 
             <!-- Visual Outputs -->
-            <div class="grid-item visual-item visual-large">
+            <div class="grid-item visual-item visual-large" id="visual-section" style="order: 2;">
                 <h3>Visual Outputs</h3>
                 <div id="visual-grid" class="visual-grid"></div>
             </div>
 
             <!-- Parameters -->
-            <div class="grid-item params-item">
+            <div class="grid-item params-item" style="order: 4;">
                 <h3>Model Parameters</h3>
                 <div id="params-container" class="params-container">
                     <p class="loading">Loading parameters...</p>

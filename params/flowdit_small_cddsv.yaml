@@ -33,6 +33,7 @@ model_params:
   mlp_ratio: 4.0         # MLP hidden dim = hidden_dim * mlp_ratio
   dropout: 0.0           # Dropout rate
   cond_drop_prob: 0.1    # Probability of dropping text conditioning (for CFG)
+  context_drop_prob: 0.1  # Probability of dropping context/z_init conditioning (for two-scale CFG)
 
 # Scale factor for Theia latents (computed from data: 1/std)
 scale_factor: 1.68355
@@ -54,7 +55,9 @@ gradient_checkpointing: false
 # Sampling/visualization
 vis_every: 5           # Visualize every N epochs
 sample_steps: 50       # Euler steps for sampling
-cfg_scale: 1.0         # Classifier-free guidance scale (1.0 = no CFG)
+cfg_scale: 1.0         # Single-scale CFG weight (legacy, used when two-scale is disabled)
+context_cfg_scale: 2.5 # Two-scale CFG: context weight (spatial fidelity to scene)
+prompt_cfg_scale: 7.5  # Two-scale CFG: prompt weight (instruction following strength)
 
 # Checkpoint
 resume_from_checkpoint: true

@@ -154,6 +154,19 @@ class MemoryMappedDataset(Dataset):
             self.indices = np.load(split_file)
         else:
             self.indices = np.arange(len(self.initial_embed))
+
+        # Clamp to the smallest array to avoid out-of-bounds access
+        max_valid = min(
+            len(self.initial_raw), len(self.target_raw),
+            len(self.initial_embed), len(self.target_embed),
+            len(self.label_hidden), len(self.label_attn_mask),
+            len(self.labels),
+        )
+        orig_len = len(self.indices)
+        self.indices = self.indices[self.indices < max_valid]
+        if len(self.indices) < orig_len:
+            print(f"[MemoryMappedDataset] Filtered {orig_len - len(self.indices)} "
+                  f"out-of-bounds indices (max valid index: {max_valid - 1})")
     
     def __len__(self):
         return len(self.indices)

@@ -3,11 +3,9 @@ import torch
 from torch import optim
 import torch.nn.functional as F
 import numpy as np
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-import pickle
-import glob
 import yaml
 import sys
 import os
@@ -15,6 +13,8 @@ import time
 
 from models.theia_decoder import Decoder
 from utils.args import parse_args
+from utils.checkpoint import load_checkpoint, save_checkpoint
+from utils.visualization import visualize_decoder_samples, plot_loss_curves
 from frontend.training_monitor import TrainingMonitor
 
 import warnings
@@ -43,6 +43,10 @@ size=(224, 224)  # Image size for resizing
 
 if args.frontend:
     monitor = TrainingMonitor(params)
+    monitor.register_chart('Loss', [
+        {'label': 'Train', 'color': '#c88650'},
+        {'label': 'Val',   'color': '#b8bb26'},
+    ])
 
 # ============================================================================
 # Load data
@@ -84,54 +88,24 @@ optimizer = optim.Adam(model.parameters(), lr=lr)
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
 
 print("Checking for existing checkpoint to resume from...")
-# Before training loop, add lists to store losses
 train_losses = []
 test_losses = []
-embedding_usage_history = []
 best_loss = float('inf')
 best_loss_epoch = -1
 start_epoch = 0
 
-# Check if we should resume from checkpoint (controlled by config)
 resume_from_checkpoint = True
 checkpoint_path = params["model_path"]
 
-if resume_from_checkpoint and os.path.exists(checkpoint_path):
-    print(f"Found checkpoint at {checkpoint_path}")
-    try:
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        
-        # Load model state
-        model.load_state_dict(checkpoint['model'], strict=True)
-    except (RuntimeError, EOFError, pickle.UnpicklingError) as e:
-        print(f"⚠ Warning: Checkpoint appears corrupted ({e})")
-        print(f"⚠ Removing corrupted checkpoint and starting fresh")
-        os.remove(checkpoint_path)
-        checkpoint = None
-    
-    # Load optimizer state if available
-    if checkpoint and 'optimizer' in checkpoint:
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        print("✓ Loaded optimizer state")
-    
-    # Load training progress
-    if checkpoint and 'epoch' in checkpoint:
-        start_epoch = checkpoint['epoch'] + 1  # Start from next epoch
-        print(f"✓ Resuming from epoch {start_epoch}")
-    
-    if checkpoint and 'train_loss' in checkpoint and 'test_loss' in checkpoint:
-        best_loss = checkpoint['test_loss']
-        print(f"✓ Best loss so far: {best_loss:.4f}")
-    
-    # Load loss history if available
-    if checkpoint and 'train_losses' in checkpoint:
-        train_losses = checkpoint['train_losses']
-        test_losses = checkpoint['test_losses']
-        print(f"✓ Loaded loss history ({len(train_losses)} epochs)")
+if resume_from_checkpoint:
+    meta = load_checkpoint(checkpoint_path, {'model': model, 'optimizer': optimizer})
 else:
-    if resume_from_checkpoint and not os.path.exists(checkpoint_path):
-        print(f"Warning: resume_from_checkpoint=True but no checkpoint found at {checkpoint_path}")
-    print("Starting training from scratch")
+    meta = {}
+
+start_epoch = meta.get('epoch', -1) + 1
+best_loss = meta.get('test_loss', float('inf'))
+train_losses = meta.get('train_losses', [])
+test_losses = meta.get('test_losses', [])
 
 print("VQ-VAE model built.")
 
@@ -205,54 +179,24 @@ for epoch in pbar:
         f.write(f'{epoch},val,{avg_test_loss:.6f}\n')
     
     # Save example validation reconstructions
-    model.eval()
     with torch.no_grad():
-        # Get a batch from test loader
         sample_z, sample_target = next(iter(test_loader))
         sample_z = sample_z.to(device)
         sample_target = sample_target.to(device)
-        frames = sample_target
-        
-        # Reconstruct from pre-embedded features
-        sample_recons = model.forward(sample_z)
-        
-        # Save first 4 examples as a grid
-        n_samples = min(4, frames.shape[0])
-        fig, axes = plt.subplots(2, n_samples, figsize=(n_samples*3, 6))
-        
-        for i in range(n_samples):
-            # Original
-            orig_img = frames[i].cpu().permute(1, 2, 0).numpy()
-            orig_img = np.clip(orig_img, 0, 1)
-            axes[0, i].imshow(orig_img)
-            axes[0, i].set_title(f'Original {i+1}')
-            axes[0, i].axis('off')
-            
-            # Reconstruction
-            recon_img = sample_recons[i].cpu().permute(1, 2, 0).numpy()
-            recon_img = np.clip(recon_img, 0, 1)
-            axes[1, i].imshow(recon_img)
-            axes[1, i].set_title(f'Reconstructed {i+1}')
-            axes[1, i].axis('off')
-        
-        plt.tight_layout()
-        if not os.path.exists(f'{results_path}/decoded'):
-            os.makedirs(f'{results_path}/decoded')
-        plt.savefig(f'{results_path}/decoded/epoch_{epoch+1:03d}.png', dpi=100, bbox_inches='tight')
-        plt.close()
+        visualize_decoder_samples(
+            model, sample_z, sample_target, epoch,
+            save_dir=results_path + '/decoded', num_vis=4,
+        )
     
     # Update frontend with epoch-level averages (after visual is saved)
     if args.frontend:
         monitor.update_epoch(
             epoch,
-            avg_train_loss,
-            {
-                'loss': avg_train_loss
-            },
-            avg_test_loss,
-            {
-                'loss': avg_test_loss
-            }
+            charts={'Loss': {'Train': avg_train_loss, 'Val': avg_test_loss}},
+            tables={'Loss': {
+                'Train': {'loss': avg_train_loss},
+                'Val':   {'loss': avg_test_loss},
+            }},
         )
     
     # Update scheduler
@@ -264,68 +208,31 @@ for epoch in pbar:
     # Save best model
     if avg_test_loss < best_loss:
         best_loss = avg_test_loss
-        torch.save({
+        best_loss_epoch = epoch
+        save_checkpoint(params["model_path"], {'model': model, 'optimizer': optimizer}, {
             'epoch': epoch,
-            'model': model.state_dict(),
-            'optimizer': optimizer.state_dict(),
             'train_loss': avg_train_loss,
             'test_loss': avg_test_loss,
             'train_losses': train_losses,
             'test_losses': test_losses,
-        }, params["model_path"])
+        })
         print(f"✓ Saved best model with test loss: {best_loss:.4f}")
 
 
 print("Finetuning complete!")
 print(f"Best test loss: {best_loss:.4f}")
 
-# Plot training curves
-plt.figure(figsize=(10, 5))
-plt.plot(train_losses, label='Train Loss', color='orange')
-plt.plot(test_losses, label='Test Loss', color='green')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.title('VQ-VAE Finetuning Loss')
-plt.legend()
-plt.grid(True)
-plt.savefig(results_path + 'flexvae_finetuning_loss.png')
-plt.show()
+plot_loss_curves(train_losses, test_losses, results_path + 'training_losses.png',
+                 best_loss_epoch, title='Theia Decoder Training')
 
 model.eval()
 
 # Visualize some reconstructions and associated latent codes
-data_iter = iter(test_loader)
-viz_z, viz_data = next(data_iter)
+model.eval()
+viz_z, viz_data = next(iter(test_loader))
 viz_z = viz_z.to(device)
 viz_data = viz_data.to(device)
-
-with torch.no_grad():
-    recons = model.forward(viz_z)
-    
-    n_imgs = min(8, viz_data.shape[0])  # Number of images to show
-    
-    fig, axes = plt.subplots(2, n_imgs, figsize=(2*n_imgs, 4))
-    
-    # Plot originals
-    for i in range(n_imgs):
-        img = viz_data[i].permute(1,2,0).cpu().numpy()
-        img = np.clip(img, 0, 1)
-        axes[0, i].imshow(img)
-        axes[0, i].axis('off')
-        if i == 0:
-            axes[0, 0].set_ylabel('Original\n224×224', fontsize=10)
-    
-    # Plot reconstructions
-    res = recons.shape[2]
-    for i in range(n_imgs):
-        img = recons[i].permute(1,2,0).detach().cpu().numpy()
-        img = np.clip(img, 0, 1)
-        axes[1, i].imshow(img)
-        axes[1, i].axis('off')
-        if i == 0:
-            axes[1, 0].set_ylabel(f'Recon\n{res}×{res}', fontsize=10)
-
-    plt.tight_layout()
-    plt.savefig(results_path + 'final_reconstructions.png', dpi=300, bbox_inches='tight')
-    plt.show()
-
+visualize_decoder_samples(
+    model, viz_z, viz_data, epoch=-1,
+    save_dir=results_path, num_vis=8,
+)

@@ -94,6 +94,7 @@ class TrainingMonitor:
         self.params = params
         self.last_mode = None
         self.last_batch_idx = -1
+        self._csv_loaded = False
         
         # Initialize data structure
         self.data = {
@@ -104,27 +105,40 @@ class TrainingMonitor:
                 "total_batches": 0,
                 "batch_mode": "train"  # 'train' or 'val'
             },
-            "history": {
-                "epochs": [],
-                "train_loss": [],
-                "val_loss": []
-            },
-            "losses": {
-                "train": {"total": None, "components": {}},
-                "val": {"total": None, "components": {}}
-            },
+            "charts": {},     # populated by register_chart()
+            "tables": {},     # populated by update_epoch()
             "visuals": {
                 "reconstructions": [],
                 "generations": []
             },
             "parameters": params,
         }
+    
+    def register_chart(self, name, series):
+        """
+        Register a named chart with series configuration.
+        Call this before training starts for each chart you want displayed.
         
-        # Load existing training history from CSV if available
-        self._load_history_from_csv()
+        Args:
+            name: Chart title (e.g. "Generator", "Discriminator", "Loss")
+            series: List of dicts with 'label' and 'color' keys, e.g.
+                    [{"label": "Train", "color": "#c88650"},
+                     {"label": "Val",   "color": "#b8bb26"}]
+        """
+        self.data["charts"][name] = {
+            "order": len(self.data["charts"]),
+            "series": series,
+            "epochs": [],
+            "history": {s["label"]: [] for s in series},
+        }
+        # Re-load CSV after each registration so all charts get populated
+        self._csv_loaded = False
     
     def _load_history_from_csv(self):
-        """Load training history from CSV file if it exists"""
+        """Load training history from CSV file if it exists.
+        Populates the first registered chart with total_loss per split,
+        and creates history for any additional registered charts if matching
+        CSV columns are found."""
         if 'results_path' not in self.params:
             return
         
@@ -146,50 +160,65 @@ class TrainingMonitor:
                     if epoch not in epoch_data:
                         epoch_data[epoch] = {}
                     
-                    # Store all loss components
-                    epoch_data[epoch][split] = {
-                        'total_loss': float(row['total_loss']),
-                        'recon_loss': float(row.get('recon_loss', 0)),
-                        'vq_loss': float(row.get('vq_loss', 0)),
-                        'commit_loss': float(row.get('commit_loss', 0)),
-                        'diversity_loss': float(row.get('diversity_loss', 0)),
-                        'confidence_loss': float(row.get('confidence_loss', 0)),
-                    }
+                    # Store all loss components dynamically
+                    entry = {}
+                    for key, val in row.items():
+                        if key not in ('epoch', 'split') and val:
+                            try:
+                                entry[key] = float(val)
+                            except (ValueError, TypeError):
+                                pass
+                    epoch_data[epoch][split] = entry
                 
+                # Map chart names to CSV columns
+                # First registered chart defaults to total_loss;
+                # others try <lowercase_name>_loss (e.g. "Discriminator" -> "disc_loss")
+                chart_col_map = {}
+                for i, cname in enumerate(self.data["charts"]):
+                    if i == 0:
+                        chart_col_map[cname] = 'total_loss'
+                    else:
+                        # "Discriminator" -> "disc_loss"
+                        col = cname.lower()[:4] + '_loss'
+                        chart_col_map[cname] = col
+
                 # Build history lists from complete epochs (that have both train and val)
                 for epoch in sorted(epoch_data.keys()):
-                    if 'train' in epoch_data[epoch] and 'val' in epoch_data[epoch]:
-                        self.data["history"]["epochs"].append(epoch)
-                        self.data["history"]["train_loss"].append(epoch_data[epoch]['train']['total_loss'])
-                        self.data["history"]["val_loss"].append(epoch_data[epoch]['val']['total_loss'])
+                    if 'train' not in epoch_data[epoch] or 'val' not in epoch_data[epoch]:
+                        continue
+                    
+                    for chart_name, chart in self.data["charts"].items():
+                        col = chart_col_map.get(chart_name, 'total_loss')
+                        train_val = epoch_data[epoch].get('train', {}).get(col)
+                        val_val = epoch_data[epoch].get('val', {}).get(col)
+                        # Skip epoch entirely for this chart if both splits lack data
+                        if train_val is None and val_val is None:
+                            continue
+                        chart["epochs"].append(epoch)
+                        for s in chart["series"]:
+                            label = s["label"]
+                            split = label.lower()
+                            split_data = epoch_data[epoch].get(split, {})
+                            chart["history"][label].append(split_data.get(col))
                 
                 # Set current_epoch to continue from last completed epoch
-                # And populate current loss display with last epoch's values
-                if self.data["history"]["epochs"]:
-                    last_epoch = self.data["history"]["epochs"][-1]
+                complete_epochs = [e for e in epoch_data
+                                   if 'train' in epoch_data[e] and 'val' in epoch_data[e]]
+                if complete_epochs:
+                    last_epoch = max(complete_epochs)
                     self.data["progress"]["current_epoch"] = last_epoch + 1
                     
-                    # Set current losses to last epoch's values
-                    last_train = epoch_data[last_epoch]['train']
-                    last_val = epoch_data[last_epoch]['val']
+                    # Populate tables with last epoch's component breakdown
+                    last_train = epoch_data[last_epoch].get('train', {})
+                    last_val = epoch_data[last_epoch].get('val', {})
                     
-                    self.data["losses"]["train"]["total"] = last_train['total_loss']
-                    self.data["losses"]["train"]["components"] = {
-                        'recon_loss': last_train['recon_loss'],
-                        'vq_loss': last_train['vq_loss'],
-                        'commit_loss': last_train['commit_loss'],
-                        'diversity_loss': last_train['diversity_loss'],
-                        'confidence_loss': last_train['confidence_loss'],
-                    }
-                    
-                    self.data["losses"]["val"]["total"] = last_val['total_loss']
-                    self.data["losses"]["val"]["components"] = {
-                        'recon_loss': last_val['recon_loss'],
-                        'vq_loss': last_val['vq_loss'],
-                        'commit_loss': last_val['commit_loss'],
-                        'diversity_loss': last_val['diversity_loss'],
-                        'confidence_loss': last_val['confidence_loss'],
-                    }
+                    # Build a default table from CSV columns for the first chart
+                    if self.data["charts"]:
+                        first_chart = next(iter(self.data["charts"]))
+                        self.data["tables"][first_chart] = {
+                            "Train": {k: v for k, v in last_train.items()},
+                            "Val": {k: v for k, v in last_val.items()},
+                        }
                     
                     # Load visual from last completed epoch (add 1 for filename format)
                     self.load_visuals_from_path(last_epoch + 1)
@@ -210,38 +239,51 @@ class TrainingMonitor:
         if total_batches is not None:
             self.data["progress"]["total_batches"] = total_batches
     
-    def update_epoch(self, epoch, train_loss, train_components, val_loss, val_components):
+    def update_epoch(self, epoch, charts=None, tables=None):
         """
-        Update epoch-level average losses, graph, and visuals.
-        Called once per epoch after all batches are complete.
+        Update epoch-level data. Called once per epoch after all batches complete.
         
         Args:
-            epoch: Current epoch number (0-indexed, from training loop)
-            train_loss: Average training loss for the epoch
-            train_components: Dict of average component losses for training
-            val_loss: Average validation loss for the epoch  
-            val_components: Dict of average component losses for validation
+            epoch: Current epoch number (0-indexed)
+            charts: Dict mapping chart name -> {series_label: value}, e.g.
+                     {"Generator": {"Train": 0.5, "Val": 0.4},
+                      "Discriminator": {"Train": 0.3, "Val": 0.2}}
+            tables: Dict mapping chart name -> {row_label: {col: val}}, e.g.
+                     {"Generator": {
+                         "Train": {"Flow Matching": 0.5, "Adversarial": 0.1},
+                         "Val":   {"Flow Matching": 0.4}}}
         """
+        charts = charts or {}
+        tables = tables or {}
         
-        # Update display losses
-        self.data["losses"]["train"]["total"] = float(train_loss)
-        self.data["losses"]["train"]["components"] = {
-            k: float(v) for k, v in train_components.items()
-        }
-        self.data["losses"]["val"]["total"] = float(val_loss)
-        self.data["losses"]["val"]["components"] = {
-            k: float(v) for k, v in val_components.items()
-        }
+        # Lazy-load CSV history once all charts have been registered
+        if not self._csv_loaded:
+            self._load_history_from_csv()
+            self._csv_loaded = True
         
-        # Update history for graph
-        self.data["history"]["epochs"].append(int(epoch))
-        self.data["history"]["train_loss"].append(float(train_loss))
-        self.data["history"]["val_loss"].append(float(val_loss))
+        # Update chart histories
+        for chart_name, values in charts.items():
+            chart = self.data["charts"].get(chart_name)
+            if chart is None:
+                continue
+            chart["epochs"].append(int(epoch))
+            for s in chart["series"]:
+                label = s["label"]
+                v = values.get(label)
+                chart["history"][label].append(float(v) if v is not None else None)
+        
+        # Update tables (current epoch display)
+        for table_name, rows in tables.items():
+            self.data["tables"][table_name] = {
+                row_label: {k: float(v) if isinstance(v, (int, float)) else v
+                            for k, v in cols.items()}
+                for row_label, cols in rows.items()
+            }
         
         # Load visuals from saved image (saved as epoch+1 in filename)
         self.load_visuals_from_path(epoch + 1)
         
-        # Update progress bar to show completed epochs (epoch is 0-indexed, so epoch+1 = number completed)
+        # Update progress bar to show completed epochs (epoch is 0-indexed)
         self.data["progress"]["current_epoch"] = epoch + 1
     
     def load_visuals_from_path(self, epoch, model_name=None):
