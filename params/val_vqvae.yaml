@@ -18,6 +18,7 @@ model_params:
   ignore_background: False  # For dot/color datasets
 batch_size: 128
 num_epochs: 1000
+patience: 5
 lr: 3e-4
 weight_decay: 1e-5
 

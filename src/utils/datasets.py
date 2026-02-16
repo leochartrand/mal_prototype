@@ -102,8 +102,8 @@ class MemoryMappedDataset(Dataset):
     dataset class works with any Theia variant or text encoder.
     
     Directory structure expected:
-        initial_raw.npy                          : uint8   [N, H, W, C]
-        target_raw.npy                           : uint8   [N, H, W, C]
+        initial_224.npy                          : float32 [N, 3, 224, 224] (CHW, [0,1])
+        target_224.npy                           : float32 [N, 3, 224, 224] (CHW, [0,1])
         initial_embed_{vision_model}.npy         : float32 [N, num_patches, D]
         target_embed_{vision_model}.npy          : float32 [N, num_patches, D]
         labels.pkl                               : list of N strings
@@ -132,8 +132,8 @@ class MemoryMappedDataset(Dataset):
         self.text_model = text_model
         
         # Memory-mapped arrays (read-only, not loaded into RAM)
-        self.initial_raw = np.load(f"{data_path}/initial_raw.npy", mmap_mode='r')
-        self.target_raw = np.load(f"{data_path}/target_raw.npy", mmap_mode='r')
+        self.initial_224 = np.load(f"{data_path}/initial_224.npy", mmap_mode='r')
+        self.target_224 = np.load(f"{data_path}/target_224.npy", mmap_mode='r')
         self.initial_embed = np.load(f"{data_path}/initial_embed_{vision_model}.npy", mmap_mode='r')
         self.target_embed = np.load(f"{data_path}/target_embed_{vision_model}.npy", mmap_mode='r')
         self.label_hidden = np.load(f"{data_path}/labels_hidden_{text_model}.npy", mmap_mode='r')
@@ -157,7 +157,7 @@ class MemoryMappedDataset(Dataset):
 
         # Clamp to the smallest array to avoid out-of-bounds access
         max_valid = min(
-            len(self.initial_raw), len(self.target_raw),
+            len(self.initial_224), len(self.target_224),
             len(self.initial_embed), len(self.target_embed),
             len(self.label_hidden), len(self.label_attn_mask),
             len(self.labels),
@@ -172,11 +172,11 @@ class MemoryMappedDataset(Dataset):
         return len(self.indices)
     
     def __getitem__(self, idx):
-        """Returns (x0_raw, x0_embed, xt_raw, xt_embed, c_txt, c_hidden, c_attn_mask).
+        """Returns (x0_224, x0_embed, xt_224, xt_embed, c_txt, c_hidden, c_attn_mask).
         
-        - x0_raw:      numpy uint8 [H, W, C]
+        - x0_224:      tensor float32 [3, 224, 224] in [0, 1]
         - x0_embed:     tensor float32 [num_patches, latent_dim]
-        - xt_raw:       numpy uint8 [H, W, C]
+        - xt_224:      tensor float32 [3, 224, 224] in [0, 1]
         - xt_embed:     tensor float32 [num_patches, latent_dim]
         - c_txt:        string
         - c_hidden:     tensor float32 [77, text_dim]  (per-token CLIP hidden states)
@@ -185,9 +185,9 @@ class MemoryMappedDataset(Dataset):
         actual_idx = self.indices[idx]
         
         return (
-            self.initial_raw[actual_idx].copy(),
+            torch.from_numpy(self.initial_224[actual_idx].copy()),
             torch.from_numpy(self.initial_embed[actual_idx].copy()),
-            self.target_raw[actual_idx].copy(),
+            torch.from_numpy(self.target_224[actual_idx].copy()),
             torch.from_numpy(self.target_embed[actual_idx].copy()),
             self.labels[actual_idx],
             torch.from_numpy(self.label_hidden[actual_idx].copy()),
@@ -260,14 +260,14 @@ class DecoderMemoryMappedDataset(Dataset):
 def mmap_collate_fn(batch):
     """Custom collate for MemoryMappedDataset.
     
-    Handles mixed types: numpy arrays (raw images), tensors (embeddings), strings (labels).
+    Handles mixed types: tensors (images, embeddings), strings (labels).
     """
-    x0_raw = np.stack([b[0] for b in batch])        # [B, H, W, C] numpy
-    x0_embed = torch.stack([b[1] for b in batch])    # [B, num_patches, D]
-    xt_raw = np.stack([b[2] for b in batch])         # [B, H, W, C] numpy
-    xt_embed = torch.stack([b[3] for b in batch])    # [B, num_patches, D]
-    c_txt = [b[4] for b in batch]                    # list of strings
-    c_hidden = torch.stack([b[5] for b in batch])    # [B, 77, text_dim]
-    c_attn_mask = torch.stack([b[6] for b in batch]) # [B, 77]
+    x0_224 = torch.stack([b[0] for b in batch])      # [B, 3, 224, 224]
+    x0_embed = torch.stack([b[1] for b in batch])     # [B, num_patches, D]
+    xt_224 = torch.stack([b[2] for b in batch])       # [B, 3, 224, 224]
+    xt_embed = torch.stack([b[3] for b in batch])     # [B, num_patches, D]
+    c_txt = [b[4] for b in batch]                     # list of strings
+    c_hidden = torch.stack([b[5] for b in batch])     # [B, 77, text_dim]
+    c_attn_mask = torch.stack([b[6] for b in batch])  # [B, 77]
     
-    return x0_raw, x0_embed, xt_raw, xt_embed, c_txt, c_hidden, c_attn_mask
+    return x0_224, x0_embed, xt_224, xt_embed, c_txt, c_hidden, c_attn_mask

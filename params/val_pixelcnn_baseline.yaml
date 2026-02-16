@@ -22,5 +22,6 @@ vqvae:
     ignore_background: False  # For dot/color datasets
 batch_size: 32
 num_epochs: 300
+patience: 5
 lr: 3e-4
 weight_decay: 1e-5

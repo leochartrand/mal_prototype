@@ -13,9 +13,9 @@ import matplotlib.pyplot as plt
 @torch.no_grad()
 def visualize_flowdit_samples(
     model,
-    x0_raw_batch: torch.Tensor,
+    x0_img_batch: torch.Tensor,
     x0_embed_batch: torch.Tensor,
-    xt_raw_batch: torch.Tensor,
+    xt_img_batch: torch.Tensor,
     xt_embed_batch: torch.Tensor,
     text_txt_batch: list,
     text_hidden_batch: torch.Tensor,
@@ -40,11 +40,19 @@ def visualize_flowdit_samples(
     """
     model.eval()
 
-    n_vis = min(num_vis, x0_raw_batch.shape[0])
+    n_vis = min(num_vis, x0_img_batch.shape[0])
 
-    # Raw images for display (numpy uint8 [H, W, C])
-    x0_vis = x0_raw_batch[:n_vis]
-    xt_vis = xt_raw_batch[:n_vis]
+    # Images for display — CHW float32 [0,1] tensors
+    x0_vis = x0_img_batch[:n_vis]
+    xt_vis = xt_img_batch[:n_vis]
+
+    def _to_hwc(img):
+        """Convert CHW float tensor to HWC numpy for imshow."""
+        if isinstance(img, torch.Tensor):
+            img = img.cpu().numpy()
+        if img.ndim == 3 and img.shape[0] in (1, 3):  # CHW
+            img = np.transpose(img, (1, 2, 0))
+        return np.clip(img, 0, 1)
 
     # Pre-computed embeddings
     z_init = x0_embed_batch[:n_vis].to(device) * scale_factor
@@ -73,10 +81,10 @@ def visualize_flowdit_samples(
             axes[0, i].text(0.5, 1.15, wrapped_text, transform=axes[0, i].transAxes,
                             fontsize=8, fontweight='bold', ha='center', va='bottom')
 
-            axes[0, i].imshow(x0_vis[i]); axes[0, i].axis('off')
+            axes[0, i].imshow(_to_hwc(x0_vis[i])); axes[0, i].axis('off')
             if i == 0: axes[0, 0].set_ylabel(row_labels[0], fontsize=9)
 
-            axes[1, i].imshow(xt_vis[i]); axes[1, i].axis('off')
+            axes[1, i].imshow(_to_hwc(xt_vis[i])); axes[1, i].axis('off')
             if i == 0: axes[1, 0].set_ylabel(row_labels[1], fontsize=9)
 
             img = xg_recon[i].cpu().permute(1, 2, 0).numpy()
@@ -94,8 +102,8 @@ def visualize_flowdit_samples(
             axes[0, i].text(0.5, 1.15, wrapped_text, transform=axes[0, i].transAxes,
                             fontsize=8, fontweight='bold', ha='center', va='bottom')
 
-            axes[0, i].imshow(x0_vis[i]); axes[0, i].set_title('Initial', fontsize=9); axes[0, i].axis('off')
-            axes[1, i].imshow(xt_vis[i]); axes[1, i].set_title(f'Target\ncos={cos_sims[i]:.3f}', fontsize=9); axes[1, i].axis('off')
+            axes[0, i].imshow(_to_hwc(x0_vis[i])); axes[0, i].set_title('Initial', fontsize=9); axes[0, i].axis('off')
+            axes[1, i].imshow(_to_hwc(xt_vis[i])); axes[1, i].set_title(f'Target\ncos={cos_sims[i]:.3f}', fontsize=9); axes[1, i].axis('off')
 
     plt.tight_layout()
     os.makedirs(save_dir, exist_ok=True)

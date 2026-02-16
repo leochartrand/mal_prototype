@@ -71,6 +71,10 @@ embedding_usage_history = []
 best_loss = float('inf')
 best_loss_epoch = -1
 
+# Early stopping
+patience = params.get('patience', 5)
+patience_counter = 0
+
 pbar = tqdm(range(params["num_epochs"]), desc="Training")
 for epoch in pbar:
     model.train()
@@ -129,7 +133,13 @@ for epoch in pbar:
     if avg_test_loss < best_loss:
         best_loss = avg_test_loss
         best_loss_epoch = epoch
+        patience_counter = 0
         torch.save(model.state_dict(), model_path)
+    else:
+        patience_counter += 1
+        if patience_counter >= patience:
+            print(f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)")
+            break
     
     if avg_test_loss < 1e-5:  # Early stopping condition
         print(f"Early stopping at epoch {epoch} with test loss {avg_test_loss}")

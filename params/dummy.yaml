@@ -41,6 +41,7 @@ scale_factor: 1.683076
 # Training
 batch_size: 64
 num_epochs: 50
+patience: 5
 lr: 1e-4
 min_lr: 1e-6
 weight_decay: 0.0

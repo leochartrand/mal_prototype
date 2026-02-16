@@ -234,6 +234,12 @@ class TrainingMonitor:
             total_batches: Total number of batches (optional)
             mode: 'train' or 'val'
         """
+        # Eagerly load CSV history so the frontend shows previous epochs
+        # before the first new epoch completes (e.g. when resuming)
+        if not self._csv_loaded:
+            self._load_history_from_csv()
+            self._csv_loaded = True
+
         self.data["progress"]["current_batch"] = batch_idx
         self.data["progress"]["batch_mode"] = mode
         if total_batches is not None:

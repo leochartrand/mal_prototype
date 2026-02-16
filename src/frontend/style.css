@@ -94,7 +94,7 @@ body {
 .grid-item h3 {
     margin-bottom: 15px;
     color: #b86934;
-    border-bottom: 2px solid #a46e42;
+    border-bottom: 2px solid #b86934;
     padding-bottom: 10px;
 }
 
@@ -258,5 +258,5 @@ body {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: #a46e42;
+    background: #b86934;
 }

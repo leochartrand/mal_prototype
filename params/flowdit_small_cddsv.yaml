@@ -32,8 +32,9 @@ model_params:
   num_heads: 8           # Number of attention heads (must divide 392 evenly)
   mlp_ratio: 4.0         # MLP hidden dim = hidden_dim * mlp_ratio
   dropout: 0.0           # Dropout rate
-  cond_drop_prob: 0.1    # Probability of dropping text conditioning (for CFG)
-  context_drop_prob: 0.1  # Probability of dropping context/z_init conditioning (for two-scale CFG)
+  cfg_drop_prompt: 0.05   # P(drop text only) for classifier-free guidance
+  cfg_drop_context: 0.05  # P(drop context/z_init only) for classifier-free guidance
+  cfg_drop_both: 0.05     # P(drop both text and context) for classifier-free guidance
 
 # Scale factor for Theia latents (computed from data: 1/std)
 scale_factor: 1.68355
@@ -41,6 +42,7 @@ scale_factor: 1.68355
 # Training
 batch_size: 32
 num_epochs: 50
+patience: 5
 lr: 1e-4
 min_lr: 1e-6
 weight_decay: 0.0

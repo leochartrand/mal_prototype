@@ -199,8 +199,9 @@ class AffordanceFlowDiT(nn.Module):
         max_text_len: Maximum text sequence length (77 for CLIP tokenizer)
         mlp_ratio: MLP hidden dim multiplier
         dropout: Dropout rate
-        cond_drop_prob: Probability of dropping text conditioning for CFG training
-        context_drop_prob: Probability of dropping context (z_init) conditioning for two-scale CFG
+        cfg_drop_prompt: Probability of dropping only text/prompt conditioning
+        cfg_drop_context: Probability of dropping only context (z_init) conditioning
+        cfg_drop_both: Probability of dropping both prompt and context
     """
     def __init__(
         self,
@@ -213,16 +214,18 @@ class AffordanceFlowDiT(nn.Module):
         max_text_len: int = 25,
         mlp_ratio: float = 4.0,
         dropout: float = 0.0,
-        cond_drop_prob: float = 0.1,
-        context_drop_prob: float = 0.1,
+        cfg_drop_prompt: float = 0.05,
+        cfg_drop_context: float = 0.05,
+        cfg_drop_both: float = 0.05,
     ):
         super().__init__()
         self.latent_dim = latent_dim
         self.num_patches = num_patches
         self.hidden_dim = hidden_dim
         self.depth = depth
-        self.cond_drop_prob = cond_drop_prob
-        self.context_drop_prob = context_drop_prob
+        self.cfg_drop_prompt = cfg_drop_prompt
+        self.cfg_drop_context = cfg_drop_context
+        self.cfg_drop_both = cfg_drop_both
         self.max_text_len = max_text_len
         
         # Input projections
@@ -320,14 +323,29 @@ class AffordanceFlowDiT(nn.Module):
         """
         B = z_t.shape[0]
         
+        # Categorical CFG dropout: sample which signals to drop per sample
+        cfg_total = self.cfg_drop_prompt + self.cfg_drop_context + self.cfg_drop_both
+        if self.training and cfg_total > 0:
+            if drop_text is None or drop_context is None:
+                # Categories: 0=keep both, 1=drop prompt only, 2=drop context only, 3=drop both
+                probs = torch.tensor([
+                    1.0 - cfg_total,        # keep both
+                    self.cfg_drop_prompt,    # drop prompt only
+                    self.cfg_drop_context,   # drop context only
+                    self.cfg_drop_both,      # drop both
+                ], device=z_t.device)
+                categories = torch.multinomial(probs.expand(B, -1), 1).squeeze(1)  # [B]
+                if drop_text is None:
+                    drop_text = (categories == 1) | (categories == 3)
+                if drop_context is None:
+                    drop_context = (categories == 2) | (categories == 3)
+        
         # Project inputs
         h_target = self.input_proj(z_t) + self.pos_embed_target
         h_init = self.init_proj(z_init) + self.pos_embed_init
         
-        # Two-scale CFG: independently drop context (z_init) during training
-        if self.training and self.context_drop_prob > 0:
-            if drop_context is None:
-                drop_context = torch.rand(B, device=z_t.device) < self.context_drop_prob
+        # Two-scale CFG: drop context (z_init) during training
+        if self.training and drop_context is not None and drop_context.any():
             null_ctx_init = self.null_context_emb.expand(B, -1, -1)  # [B, N, D]
             h_init = torch.where(
                 drop_context.view(B, 1, 1),
@@ -350,10 +368,8 @@ class AffordanceFlowDiT(nn.Module):
         else:
             text_key_padding_mask = None
         
-        # Two-scale CFG: independently drop text during training
-        if self.training and self.cond_drop_prob > 0:
-            if drop_text is None:
-                drop_text = torch.rand(B, device=z_t.device) < self.cond_drop_prob
+        # Two-scale CFG: drop text during training
+        if self.training and drop_text is not None and drop_text.any():
             null_ctx = self.null_text_emb.expand(B, text_ctx.shape[1], -1)
             text_ctx = torch.where(
                 drop_text.view(B, 1, 1),

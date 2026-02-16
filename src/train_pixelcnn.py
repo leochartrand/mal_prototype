@@ -90,6 +90,10 @@ test_losses = []
 best_loss = float('inf')
 best_loss_epoch = -1
 
+# Early stopping
+patience = params.get('patience', 5)
+patience_counter = 0
+
 def augment_and_encode_batch(x0, xt):
     # Augment
     seed = torch.randint(0, 100000, (1,)).item()
@@ -155,7 +159,13 @@ for epoch in pbar:
     if avg_test_loss < best_loss:
         best_loss = avg_test_loss
         best_loss_epoch = epoch
+        patience_counter = 0
         torch.save(pixelcnn.state_dict(), model_path)
+    else:
+        patience_counter += 1
+        if patience_counter >= patience:
+            print(f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)")
+            break
     
     if avg_test_loss < 1e-5:  # Early stopping condition
         print(f"Early stopping at epoch {epoch} with test loss {avg_test_loss}")

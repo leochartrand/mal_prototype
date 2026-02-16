@@ -16,5 +16,6 @@ patch_nums: [1, 2, 4, 8, 16]
 imsize: 128     
 batch_size: 32
 num_epochs: 20
+patience: 5
 lr: 3e-4
 weight_decay: 1e-5
