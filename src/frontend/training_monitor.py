@@ -114,7 +114,7 @@ class TrainingMonitor:
             "parameters": params,
         }
     
-    def register_chart(self, name, series):
+    def register_chart(self, name, series, csv_column=None):
         """
         Register a named chart with series configuration.
         Call this before training starts for each chart you want displayed.
@@ -124,21 +124,25 @@ class TrainingMonitor:
             series: List of dicts with 'label' and 'color' keys, e.g.
                     [{"label": "Train", "color": "#c88650"},
                      {"label": "Val",   "color": "#b8bb26"}]
+            csv_column: CSV column name to read history from (e.g. 'loss', 'total_loss',
+                        'disc_loss'). Each training script declares its own mapping.
+                        If None, the chart won't be populated from CSV history.
         """
         self.data["charts"][name] = {
             "order": len(self.data["charts"]),
             "series": series,
             "epochs": [],
             "history": {s["label"]: [] for s in series},
+            "csv_column": csv_column,
         }
         # Re-load CSV after each registration so all charts get populated
         self._csv_loaded = False
     
     def _load_history_from_csv(self):
         """Load training history from CSV file if it exists.
-        Populates the first registered chart with total_loss per split,
-        and creates history for any additional registered charts if matching
-        CSV columns are found."""
+        Uses the csv_column declared by each register_chart() call to map
+        chart series to the correct CSV column. Charts without a csv_column
+        are skipped."""
         if 'results_path' not in self.params:
             return
         
@@ -169,18 +173,6 @@ class TrainingMonitor:
                             except (ValueError, TypeError):
                                 pass
                     epoch_data[epoch][split] = entry
-                
-                # Map chart names to CSV columns
-                # First registered chart defaults to total_loss;
-                # others try <lowercase_name>_loss (e.g. "Discriminator" -> "disc_loss")
-                chart_col_map = {}
-                for i, cname in enumerate(self.data["charts"]):
-                    if i == 0:
-                        chart_col_map[cname] = 'total_loss'
-                    else:
-                        # "Discriminator" -> "disc_loss"
-                        col = cname.lower()[:4] + '_loss'
-                        chart_col_map[cname] = col
 
                 # Build history lists from complete epochs (that have both train and val)
                 for epoch in sorted(epoch_data.keys()):
@@ -188,7 +180,9 @@ class TrainingMonitor:
                         continue
                     
                     for chart_name, chart in self.data["charts"].items():
-                        col = chart_col_map.get(chart_name, 'total_loss')
+                        col = chart.get("csv_column")
+                        if col is None:
+                            continue
                         train_val = epoch_data[epoch].get('train', {}).get(col)
                         val_val = epoch_data[epoch].get('val', {}).get(col)
                         # Skip epoch entirely for this chart if both splits lack data

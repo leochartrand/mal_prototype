@@ -1,51 +1,51 @@
-# Configuration for AffordanceFlowDiT training
+# Configuration for FlowDiT training
 # Flow matching DiT for affordance prediction
 
 dataset_path: "../../../mnt/sda1/Datasets/chal2525/mmap_data/"
-model_path: "models/flowdit_tiny_cdiv/model.pt"
-results_path: "results/flowdit_tiny_cdiv/"
+model_path: "models/flowdit/model.pt"
+results_path: "results/flowdit/"
 
 # Encoder model names (must match filenames in dataset_path)
-vision_model: "theia_tiny_cdiv"
-text_model: "clip-vit-large-patch14"
+vision_model: "theia_small_cdiv"
+text_model: "all-MiniLM-L6-v2"
 
 # Theia encoder (frozen, for encoding images to latents)
 theia:
-  model_path: "./models/theia_tiny_cdiv"
+  model_path: "./models/theia_small_cdiv"
 
 # Theia decoder (optional, for visualization)
 theia_decoder:
-  model_path: "models/theia_decoder/tiny_cdiv/model.pt"
+  model_path: "models/theia_decoder/small_cdiv/model.pt"
   model_params:
     ch_mult: [1, 1, 2, 2, 4]
     channels: 64
     z_channels: 128
     dropout: 0.0
-    theia_dim: 192
+    theia_dim: 384
 
 # Model architecture
 model_params:
-  latent_dim: 192        # Theia-tiny output dimension
+  latent_dim: 384        # Theia-small output dimension
   num_patches: 196       # 14x14 patches from Theia
-  hidden_dim: 512        # Transformer hidden dimension
-  depth: 8               # Number of transformer blocks
-  num_heads: 8           # Number of attention heads (must divide 192 evenly)
+  hidden_dim: 768        # Transformer hidden dimension
+  depth: 12               # Number of transformer blocks
+  num_heads: 12           # Number of attention heads 
   mlp_ratio: 4.0         # MLP hidden dim = hidden_dim * mlp_ratio
-  dropout: 0.0           # Dropout rate
+  dropout: 0.1           # Dropout rate
   cfg_drop_prompt: 0.05   # P(drop text only) for classifier-free guidance
   cfg_drop_context: 0.05  # P(drop context/z_init only) for classifier-free guidance
   cfg_drop_both: 0.05     # P(drop both text and context) for classifier-free guidance
 
 # Scale factor for Theia latents (computed from data: 1/std)
-scale_factor: 1.683076
+scale_factor: 1.702949
 
 # Training
 batch_size: 32
-num_epochs: 50
+num_epochs: 20
 patience: 5
 lr: 1e-4
 min_lr: 1e-6
-weight_decay: 0.0
+weight_decay: 0.01
 grad_clip: 1.0
 
 # EMA (Exponential Moving Average)
@@ -71,6 +71,8 @@ adversarial:
   ramp_end_epoch: 10       # Epochs after start_epoch when lambda reaches full value
   euler_steps: 4           # Fixed Euler steps for generation during training
   disc_lr: 2.0e-4          # Discriminator learning rate (separate optimizer)
-  disc_channels: [256, 512]
+  disc_channels: [384, 512, 512]
   loss_type: 'bce'         # 'bce' or 'hinge'
   cfg_scale_train: 1.0     # CFG scale during adversarial generation (1.0 = no CFG)
+  r1_gamma: 10.0           # R1 gradient penalty coefficient
+  r1_interval: 16          # Apply R1 every N discriminator steps (lazy R1)

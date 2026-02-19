@@ -1,4 +1,4 @@
-# Configuration for AffordanceFlowDiT training
+# Configuration for FlowDiT training
 # Flow matching DiT for affordance prediction
 
 dataset_path: "../../../mnt/sda1/Datasets/chal2525/mmap_data/"
@@ -70,6 +70,8 @@ adversarial:
   ramp_start_epoch: 2      # Epochs after start_epoch before lambda ramp begins (disc warmup)
   ramp_end_epoch: 10       # Epochs after start_epoch when lambda reaches full value
   euler_steps: 4           # Fixed Euler steps for generation during training
-  disc_lr: 1.0e-5          # Discriminator learning rate (separate optimizer)
-  disc_channels: [256, 512]
+  disc_lr: 2.0e-4          # Discriminator learning rate (separate optimizer)
+  disc_channels: [384, 512, 512]
   loss_type: 'bce'         # 'bce' or 'hinge'
+  r1_gamma: 10.0           # R1 gradient penalty coefficient
+  r1_interval: 16          # Apply R1 every N discriminator steps (lazy R1)

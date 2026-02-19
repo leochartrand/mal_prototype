@@ -1,5 +1,5 @@
 """
-Training script for AffordanceFlowDiT.
+Training script for FlowDiT.
 
 Trains a flow matching DiT model to predict target affordance states from
 initial observations and text commands.
@@ -19,6 +19,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import numpy as np
 import sys
 import os
+import math
 import yaml
 from tqdm import tqdm
 import time
@@ -26,7 +27,7 @@ import matplotlib.pyplot as plt
 import textwrap
 import warnings
 
-from models.flowdit import AffordanceFlowDiT, flow_matching_loss
+from models.flowdit import FlowDiT, flow_matching_loss
 from models.theia_decoder import Decoder as TheiaDecoder
 from utils.args import parse_args
 from utils.ema import EMA
@@ -44,7 +45,7 @@ warnings.filterwarnings('ignore', message='find_unused_parameters=True was speci
 # ============================================================================
 
 args = parse_args(sys.argv[1:])
-params = yaml.safe_load(open("./params/" + args.params, 'r'))
+params = yaml.safe_load(open("./config/" + args.config, 'r'))
 
 model_path = params["model_path"]
 if not os.path.exists(os.path.dirname(model_path)):
@@ -169,7 +170,7 @@ if cond_drop_prob is not None and "cfg_drop_prompt" not in params["model_params"
     cfg_drop_prompt -= cfg_drop_both
     cfg_drop_context -= cfg_drop_both
 
-model = AffordanceFlowDiT(
+model = FlowDiT(
     latent_dim=latent_dim,
     num_patches=num_patches,
     hidden_dim=hidden_dim,
@@ -199,25 +200,32 @@ prompt_cfg_scale = params.get("prompt_cfg_scale", None)
 # Register frontend chart
 if args.frontend and is_main:
     monitor.register_chart('Loss', [
-        {'label': 'Train', 'color': '#c88650'},
+        {'label': 'Train', 'color': '#b86934'},
         {'label': 'Val',   'color': '#b8bb26'},
-    ])
+    ], csv_column='loss')
 
 # ============================================================================
-# Optimizer and scheduler
+# Optimizer and scheduler (linear warmup, then constant LR)
 # ============================================================================
+
+lr = float(params["lr"])
+warmup_steps = int(params.get("warmup_steps", 2000))
 
 optimizer = torch.optim.AdamW(
     model.parameters(),
-    lr=float(params["lr"]),
+    lr=lr,
     weight_decay=float(params.get("weight_decay", 0.0))
 )
 
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer,
-    T_max=params["num_epochs"],
-    eta_min=float(params.get("min_lr", 1e-6))
-)
+def lr_lambda(step):
+    if step < warmup_steps:
+        return step / max(1, warmup_steps)
+    return 1.0
+
+scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+if is_main:
+    print(f"LR schedule: linear warmup {warmup_steps} steps, then constant lr={lr}")
 
 # Optional EMA (not a wrapper, just for parameter swapping)
 use_ema = params.get("use_ema", False)
@@ -352,6 +360,7 @@ for epoch in pbar:
             torch.nn.utils.clip_grad_norm_(model.parameters(), params["grad_clip"])
 
         optimizer.step()
+        scheduler.step()
     
     avg_train_loss = total_train_loss / len(train_loader)
 
@@ -442,9 +451,6 @@ for epoch in pbar:
             }},
         )
     
-    # Update scheduler
-    scheduler.step()
-    
     # Update progress bar
     pbar.set_postfix({
         'Train': f'{avg_train_loss:.4f}',
@@ -453,30 +459,35 @@ for epoch in pbar:
     })
     
     # -------------------------------------------------------------------------
-    # Save checkpoint (rank 0 only, use raw model to avoid module. prefix)
+    # Save checkpoint (rank 0 only) + early stopping (all ranks)
     # -------------------------------------------------------------------------
-    if ddp:
-        dist.barrier()  # Ensure all ranks finish the epoch before saving
-    if is_main and avg_test_loss < best_loss:
+    if avg_test_loss < best_loss:
         best_loss = avg_test_loss
         best_loss_epoch = epoch
         patience_counter = 0
-        if use_ema:
-            ema.swap_parameters_with_ema(store_params_in_ema=True)
-        save_checkpoint(params["model_path"], {'model': raw_model, 'optimizer': optimizer, 'scheduler': scheduler}, {
-            'epoch': epoch,
-            'train_loss': avg_train_loss,
-            'test_loss': avg_test_loss,
-            'train_losses': train_losses,
-            'test_losses': test_losses,
-        })
-        if use_ema:
-            ema.swap_parameters_with_ema(store_params_in_ema=True)
+        if ddp:
+            dist.barrier()
+        if is_main:
+            if use_ema:
+                ema.swap_parameters_with_ema(store_params_in_ema=True)
+            save_checkpoint(params["model_path"], {'model': raw_model, 'optimizer': optimizer, 'scheduler': scheduler}, {
+                'epoch': epoch,
+                'train_loss': avg_train_loss,
+                'test_loss': avg_test_loss,
+                'train_losses': train_losses,
+                'test_losses': test_losses,
+            })
+            if use_ema:
+                ema.swap_parameters_with_ema(store_params_in_ema=True)
     else:
         patience_counter += 1
-        if patience_counter >= patience:
+        if ddp:
+            dist.barrier()
+
+    if patience_counter >= patience:
+        if is_main:
             print(f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)")
-            break
+        break
 
 # ============================================================================
 # Cleanup & post-training (rank 0 only for visualization)

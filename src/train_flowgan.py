@@ -1,12 +1,12 @@
 """
-Training script for AffordanceFlowDiT.
+Training script for FlowGAN.
 
-Trains a flow matching DiT model to predict target affordance states from
-initial observations and text commands.
+Trains a flow matching DiT model with optional adversarial refinement to predict
+target affordance states from initial observations and text commands.
 
 Usage:
-    Single GPU:  python train_flowdit.py --params flowdit.yaml [--gpu 0] [--frontend] [--dummy]
-    Multi-GPU:   torchrun --nproc_per_node=N src/train_flowdit.py --params flowdit.yaml [--frontend]
+    Single GPU:  python train_flowgan.py --params flowgan.yaml [--gpu 0] [--frontend] [--dummy]
+    Multi-GPU:   torchrun --nproc_per_node=N src/train_flowgan.py --params flowgan.yaml [--frontend]
 """
 
 import torch
@@ -20,6 +20,7 @@ from contextlib import nullcontext
 import numpy as np
 import sys
 import os
+import math
 import yaml
 from tqdm import tqdm
 import time
@@ -27,7 +28,7 @@ import matplotlib.pyplot as plt
 import textwrap
 import warnings
 
-from models.flowdit import AffordanceFlowDiT, flow_matching_loss
+from models.flowdit import FlowDiT, flow_matching_loss
 from models.theia_decoder import Decoder as TheiaDecoder
 from utils.args import parse_args
 from utils.ema import EMA
@@ -37,19 +38,21 @@ from models.discriminator import (
     EmbeddingDiscriminator,
     discriminator_loss_bce, generator_loss_bce,
     discriminator_loss_hinge, generator_loss_hinge,
+    r1_gradient_penalty,
 )
 
 # Suppress transformers warnings
 from transformers import logging as transformers_logging
 transformers_logging.set_verbosity_error()
 warnings.filterwarnings('ignore', message='Some weights of.*were not initialized')
+warnings.filterwarnings('ignore', message='find_unused_parameters=True was specified')
 
 # ============================================================================
 # Setup
 # ============================================================================
 
 args = parse_args(sys.argv[1:])
-params = yaml.safe_load(open("./params/" + args.params, 'r'))
+params = yaml.safe_load(open("./config/" + args.config, 'r'))
 
 model_path = params["model_path"]
 if not os.path.exists(os.path.dirname(model_path)):
@@ -71,9 +74,8 @@ if ddp:
     if is_main:
         print(f"DDP: {world_size} GPUs")
     else:
-        # Silence non-rank-0 processes (catches all print + library output)
+        # Silence non-rank-0 print output, keep stderr for error tracebacks
         sys.stdout = open(os.devnull, 'w')
-        sys.stderr = open(os.devnull, 'w')
 else:
     device = torch.device(f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu')
     is_main = True
@@ -175,7 +177,7 @@ if cond_drop_prob is not None and "cfg_drop_prompt" not in params["model_params"
     cfg_drop_prompt -= cfg_drop_both
     cfg_drop_context -= cfg_drop_both
 
-model = AffordanceFlowDiT(
+model = FlowDiT(
     latent_dim=latent_dim,
     num_patches=num_patches,
     hidden_dim=hidden_dim,
@@ -216,7 +218,7 @@ disc_optimizer = None
 if use_adversarial:
     discriminator = EmbeddingDiscriminator(
         latent_dim=latent_dim,
-        channels=adv_config.get("disc_channels", [256, 512]),
+        channels=adv_config.get("disc_channels", [384, 512, 512]),
     ).to(device)
 
     disc_optimizer = torch.optim.AdamW(
@@ -232,6 +234,9 @@ if use_adversarial:
     adv_cfg_scale = 1.0
     ramp_start = adv_config.get("ramp_start_epoch", 2)   # epochs after start_epoch
     ramp_end = adv_config.get("ramp_end_epoch", 10)       # epochs after start_epoch
+    r1_gamma = adv_config.get("r1_gamma", 10.0)
+    r1_interval = adv_config.get("r1_interval", 16)
+    disc_step = 0  # global discriminator step counter for lazy R1
 
     # Select loss functions
     if adv_loss_type == 'hinge':
@@ -244,30 +249,37 @@ if use_adversarial:
 # Register frontend charts (after adversarial config is known)
 if args.frontend and is_main:
     monitor.register_chart('Generator', [
-        {'label': 'Train', 'color': '#c88650'},
+        {'label': 'Train', 'color': '#b86934'},
         {'label': 'Val',   'color': '#b8bb26'},
-    ])
+    ], csv_column='total_loss')
     if use_adversarial:
         monitor.register_chart('Discriminator', [
             {'label': 'Train', 'color': '#d3869b'},
             {'label': 'Val',   'color': '#83a598'},
-        ])
+        ], csv_column='disc_loss')
 
 # ============================================================================
-# Optimizer and scheduler
+# Optimizer and scheduler (linear warmup, then constant LR)
 # ============================================================================
+
+lr = float(params["lr"])
+warmup_steps = int(params.get("warmup_steps", 2000))
 
 optimizer = torch.optim.AdamW(
     model.parameters(),
-    lr=float(params["lr"]),
+    lr=lr,
     weight_decay=float(params.get("weight_decay", 0.0))
 )
 
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer,
-    T_max=params["num_epochs"],
-    eta_min=float(params.get("min_lr", 1e-6))
-)
+def lr_lambda(step):
+    if step < warmup_steps:
+        return step / max(1, warmup_steps)
+    return 1.0
+
+scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+if is_main:
+    print(f"LR schedule: linear warmup {warmup_steps} steps, then constant lr={lr}")
 
 # Optional EMA (not a wrapper, just for parameter swapping)
 use_ema = params.get("use_ema", False)
@@ -310,7 +322,7 @@ patience_counter = 0
 raw_model = model
 raw_discriminator = discriminator
 if ddp:
-    model = DDP(model, device_ids=[local_rank])
+    model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
     if discriminator is not None:
         discriminator = DDP(discriminator, device_ids=[local_rank])
 
@@ -386,21 +398,23 @@ if args.dummy and not ddp:
         torch.cuda.synchronize()
         t_gen = time.perf_counter() - t0
 
-        # Discriminator forward + backward
+        # Discriminator forward + backward (with R1 on first step)
         t0 = time.perf_counter()
         disc_optimizer.zero_grad()
-        D_real = discriminator(zt)
+        zt_r1 = zt.detach().requires_grad_(True)
+        r1_loss, D_real = r1_gradient_penalty(discriminator, zt_r1, gamma=r1_gamma)
         D_fake = discriminator(generated.detach())
-        loss_disc = disc_loss_fn(D_real, D_fake)
+        loss_disc = disc_loss_fn(D_real, D_fake) + r1_loss
         loss_disc.backward()
         disc_optimizer.step()
         torch.cuda.synchronize()
         t_disc = time.perf_counter() - t0
 
         disc_loss_item = loss_disc.item()
+        r1_loss_item = r1_loss.item()
         d_real_mean = D_real.mean().item()
         d_fake_mean = D_fake.mean().item()
-        del D_real, D_fake, loss_disc
+        del D_real, D_fake, loss_disc, r1_loss, zt_r1
 
         # Generator adversarial forward + backward
         t0 = time.perf_counter()
@@ -413,7 +427,7 @@ if args.dummy and not ddp:
 
         print(f"\n--- Adversarial ---")
         print(f"  Generate ({adv_euler_steps} steps): {t_gen*1000:7.1f} ms")
-        print(f"  Disc update:          {t_disc*1000:7.1f} ms")
+        print(f"  Disc update (+R1):    {t_disc*1000:7.1f} ms  (R1={r1_loss_item:.4f})")
         print(f"  Gen adv backward:     {t_adv*1000:7.1f} ms")
         print(f"  Peak mem: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
         val_batch = next(iter(test_loader))
@@ -502,11 +516,22 @@ for epoch in pbar:
 
             # ---- Discriminator update (always runs) ----
             disc_optimizer.zero_grad()
-            D_real = discriminator(zt)
+
+            # R1 gradient penalty (lazy: every r1_interval disc steps)
+            if (r1_gamma > 0) and (disc_step % r1_interval == 0):
+                zt_r1 = zt.detach().requires_grad_(True)
+                r1_loss, D_real = r1_gradient_penalty(discriminator, zt_r1, gamma=r1_gamma)
+            else:
+                r1_loss = None
+                D_real = discriminator(zt)
+
             D_fake = discriminator(generated.detach())
             loss_disc = disc_loss_fn(D_real, D_fake)
+            if r1_loss is not None:
+                loss_disc = loss_disc + r1_loss
             loss_disc.backward()
             disc_optimizer.step()
+            disc_step += 1
 
             del D_real, D_fake
             total_disc_loss += loss_disc.item()
@@ -531,6 +556,7 @@ for epoch in pbar:
             torch.nn.utils.clip_grad_norm_(model.parameters(), params["grad_clip"])
 
         optimizer.step()
+        scheduler.step()
     
     total_train_loss = total_flow_loss + total_adv_loss
 
@@ -682,9 +708,6 @@ for epoch in pbar:
             }
         monitor.update_epoch(epoch, charts=chart_data, tables=table_data)
     
-    # Update scheduler
-    scheduler.step()
-    
     # Update progress bar
     postfix = {
         'Train': f'{avg_train_loss:.4f}',
@@ -696,34 +719,39 @@ for epoch in pbar:
     pbar.set_postfix(postfix)
     
     # -------------------------------------------------------------------------
-    # Save checkpoint (rank 0 only, use raw model to avoid module. prefix)
+    # Save checkpoint (rank 0 only) + early stopping (all ranks)
     # -------------------------------------------------------------------------
-    if ddp:
-        dist.barrier()  # Ensure all ranks finish the epoch before saving
-    if is_main and avg_test_loss < best_loss:
+    if avg_test_loss < best_loss:
         best_loss = avg_test_loss
         best_loss_epoch = epoch
         patience_counter = 0
-        if use_ema:
-            ema.swap_parameters_with_ema(store_params_in_ema=True)
-        save_modules = {'model': raw_model, 'optimizer': optimizer, 'scheduler': scheduler}
-        if use_adversarial and raw_discriminator is not None:
-            save_modules['discriminator'] = raw_discriminator
-            save_modules['disc_optimizer'] = disc_optimizer
-        save_checkpoint(params["model_path"], save_modules, {
-            'epoch': epoch,
-            'train_loss': avg_train_loss,
-            'test_loss': avg_test_loss,
-            'train_losses': train_losses,
-            'test_losses': test_losses,
-        })
-        if use_ema:
-            ema.swap_parameters_with_ema(store_params_in_ema=True)
+        if ddp:
+            dist.barrier()
+        if is_main:
+            if use_ema:
+                ema.swap_parameters_with_ema(store_params_in_ema=True)
+            save_modules = {'model': raw_model, 'optimizer': optimizer, 'scheduler': scheduler}
+            if use_adversarial and raw_discriminator is not None:
+                save_modules['discriminator'] = raw_discriminator
+                save_modules['disc_optimizer'] = disc_optimizer
+            save_checkpoint(params["model_path"], save_modules, {
+                'epoch': epoch,
+                'train_loss': avg_train_loss,
+                'test_loss': avg_test_loss,
+                'train_losses': train_losses,
+                'test_losses': test_losses,
+            })
+            if use_ema:
+                ema.swap_parameters_with_ema(store_params_in_ema=True)
     else:
         patience_counter += 1
-        if patience_counter >= patience:
+        if ddp:
+            dist.barrier()
+
+    if patience_counter >= patience:
+        if is_main:
             print(f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)")
-            break
+        break
 
 # ============================================================================
 # Cleanup & post-training (rank 0 only for visualization)

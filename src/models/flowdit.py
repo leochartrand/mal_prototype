@@ -1,7 +1,7 @@
 """
-Flow Matching DiT for Affordance Prediction
+Flow Matching DiT
 
-A Diffusion Transformer adapted for flow matching that predicts target affordance 
+A Diffusion Transformer adapted for flow matching that predicts target
 states from initial observations and text commands. Uses sequence concatenation 
 for source image conditioning and CROSS-ATTENTION for text conditioning.
 
@@ -185,9 +185,9 @@ class FinalLayer(nn.Module):
         return x
 
 
-class AffordanceFlowDiT(nn.Module):
+class FlowDiT(nn.Module):
     """
-    Flow Matching DiT for Affordance Prediction with Cross-Attention Text Conditioning.
+    Flow Matching DiT with Cross-Attention Text Conditioning.
     
     Args:
         latent_dim: Dimension of Theia latent features (384 for Theia-small)
@@ -644,7 +644,7 @@ class AffordanceFlowDiT(nn.Module):
 
 
 def flow_matching_loss(
-    model: AffordanceFlowDiT,
+    model: FlowDiT,
     z_init: torch.Tensor,
     z_target: torch.Tensor,
     text_emb: torch.Tensor,
@@ -655,7 +655,7 @@ def flow_matching_loss(
     Compute flow matching loss.
     
     Args:
-        model: AffordanceFlowDiT model
+        model: FlowDiT model
         z_init: Initial observation latents [B, N, D]
         z_target: Target observation latents [B, N, D]
         text_emb: Per-token text hidden states [B, seq_len, text_dim]

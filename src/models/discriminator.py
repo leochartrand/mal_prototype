@@ -5,44 +5,46 @@ Judges whether a [B, 196, D] embedding (reshaped to [B, D, 14, 14])
 looks like a real Theia encoding. No text or init-state conditioning —
 realism only, task-specificity is the flow model's job.
 
-Architecture: 3-layer conv with spectral normalization.
-14×14 → 7×7 → 3×3 → 1×1 (global receptive field at final layer).
+Architecture: spectrally-normalized conv stack + linear head.
+Default 3 layers: 14×14 → 7×7 → 4×4 → 2×2, then flatten → linear → 1.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd import grad
 
 
 class EmbeddingDiscriminator(nn.Module):
-    def __init__(self, latent_dim: int = 384, channels: list = [256, 512]):
+    def __init__(self, latent_dim: int = 384, channels: list = [384, 512, 512]):
         super().__init__()
         self.latent_dim = latent_dim
 
-        layers = []
+        conv_layers = []
         in_ch = latent_dim
 
-        # Layer 1: [B, D, 14, 14] → [B, channels[0], 7, 7]
-        layers.append(nn.utils.spectral_norm(
-            nn.Conv2d(in_ch, channels[0], kernel_size=4, stride=2, padding=1)
-        ))
-        layers.append(nn.LeakyReLU(0.2, inplace=True))
+        for out_ch in channels:
+            conv_layers.append(nn.utils.spectral_norm(
+                nn.Conv2d(in_ch, out_ch, kernel_size=4, stride=2, padding=1)
+            ))
+            conv_layers.append(nn.LeakyReLU(0.2, inplace=True))
+            in_ch = out_ch
 
-        # Layer 2: [B, channels[0], 7, 7] → [B, channels[1], 3, 3]
-        layers.append(nn.utils.spectral_norm(
-            nn.Conv2d(channels[0], channels[1], kernel_size=4, stride=2, padding=1)
-        ))
-        layers.append(nn.LeakyReLU(0.2, inplace=True))
+        self.conv = nn.Sequential(*conv_layers)
 
-        # Layer 3: [B, channels[1], 3, 3] → [B, 1, 1, 1]
-        layers.append(nn.utils.spectral_norm(
-            nn.Conv2d(channels[1], 1, kernel_size=3, stride=1, padding=0)
-        ))
+        # Compute spatial size after all stride-2 layers starting from 14×14
+        spatial = 14
+        for _ in channels:
+            spatial = (spatial + 2 * 1 - 4) // 2 + 1  # k=4, s=2, p=1
+        self.flat_dim = channels[-1] * spatial * spatial
 
-        self.net = nn.Sequential(*layers)
+        self.head = nn.utils.spectral_norm(
+            nn.Linear(self.flat_dim, 1)
+        )
 
         n_params = sum(p.numel() for p in self.parameters())
-        print(f"EmbeddingDiscriminator initialized with {n_params/1e6:.2f}M parameters")
+        print(f"EmbeddingDiscriminator initialized with {n_params/1e6:.2f}M parameters"
+              f" ({len(channels)} conv layers, head {self.flat_dim}→1)")
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         """
@@ -52,11 +54,15 @@ class EmbeddingDiscriminator(nn.Module):
             Logits [B, 1] (raw, no sigmoid — use with BCEWithLogitsLoss or hinge)
         """
         B, N, D = z.shape
-        # Reshape to spatial: [B, D, 14, 14]
         z = z.permute(0, 2, 1).reshape(B, D, 14, 14)
-        out = self.net(z)  # [B, 1, 1, 1]
-        return out.view(B, 1)
+        feat = self.conv(z)
+        feat = feat.flatten(1)
+        return self.head(feat)
 
+
+# ---------------------------------------------------------------------------
+# Loss functions
+# ---------------------------------------------------------------------------
 
 def discriminator_loss_bce(D_real: torch.Tensor, D_fake: torch.Tensor) -> torch.Tensor:
     """BCE discriminator loss. Inputs are raw logits [B, 1]."""
@@ -78,3 +84,33 @@ def discriminator_loss_hinge(D_real: torch.Tensor, D_fake: torch.Tensor) -> torc
 def generator_loss_hinge(D_fake: torch.Tensor) -> torch.Tensor:
     """Hinge generator loss."""
     return -D_fake.mean()
+
+
+# ---------------------------------------------------------------------------
+# R1 gradient penalty (lazy, StyleGAN2-style)
+# ---------------------------------------------------------------------------
+
+def r1_gradient_penalty(
+    discriminator: nn.Module, real: torch.Tensor, gamma: float = 10.0
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    R1 gradient penalty on real data.
+
+    Returns (penalty, D_real) so the caller can reuse D_real for the
+    main discriminator loss without a redundant forward pass.
+
+    Args:
+        discriminator: The discriminator network.
+        real: Real latent embeddings [B, 196, D] with requires_grad=True.
+        gamma: Penalty coefficient (applied as gamma/2 * ||grad||^2).
+    Returns:
+        Tuple of (scaled penalty, D_real logits).
+    """
+    D_real = discriminator(real)
+    gradients = grad(
+        outputs=D_real.sum(),
+        inputs=real,
+        create_graph=True,
+    )[0]
+    penalty = gradients.reshape(gradients.size(0), -1).pow(2).sum(dim=1).mean()
+    return (gamma / 2.0) * penalty, D_real

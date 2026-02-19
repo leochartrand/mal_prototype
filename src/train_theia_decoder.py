@@ -30,7 +30,7 @@ from utils.visualization import visualize_decoder_samples, plot_loss_curves
 import warnings
 
 args = parse_args(sys.argv[1:])
-params = yaml.safe_load(open("./params/"+args.params, 'r'))
+params = yaml.safe_load(open("./config/"+args.config, 'r'))
 
 dataset_path = params["dataset_path"]
 model_path = params["model_path"]
@@ -70,19 +70,19 @@ if args.frontend and is_main:
     monitor.register_chart('Loss', [
         {'label': 'Train', 'color': '#c88650'},
         {'label': 'Val',   'color': '#b8bb26'},
-    ])
+    ], csv_column='total_loss')
 
 # ============================================================================
 # Load data
 # ============================================================================
 
 print("Loading memory-mapped dataset...")
-decoder_dataset_path = params["decoder_dataset_path"]
+dataset_path = params["dataset_path"]
 vision_model = params["vision_model"]
 
 from utils.datasets import DecoderMemoryMappedDataset
-train_dataset = DecoderMemoryMappedDataset(decoder_dataset_path, vision_model=vision_model, split='train')
-test_dataset = DecoderMemoryMappedDataset(decoder_dataset_path, vision_model=vision_model, split='test')
+train_dataset = DecoderMemoryMappedDataset(dataset_path, vision_model=vision_model, split='train')
+test_dataset = DecoderMemoryMappedDataset(dataset_path, vision_model=vision_model, split='test')
 
 n_train = len(train_dataset)
 n_test = len(test_dataset)
@@ -91,8 +91,8 @@ print(f"Train samples: {n_train}, Test samples: {n_test}")
 # Dummy mode: limit samples
 if args.dummy:
     B = params["batch_size"]
-    train_dataset = DecoderMemoryMappedDataset(decoder_dataset_path, vision_model=vision_model, indices=train_dataset.indices[:B * 2])
-    test_dataset = DecoderMemoryMappedDataset(decoder_dataset_path, vision_model=vision_model, indices=test_dataset.indices[:B * 2])
+    train_dataset = DecoderMemoryMappedDataset(dataset_path, vision_model=vision_model, indices=train_dataset.traj_indices[:B])
+    test_dataset = DecoderMemoryMappedDataset(dataset_path, vision_model=vision_model, indices=test_dataset.traj_indices[:B])
     print(f"[DUMMY MODE] Using only {len(train_dataset)} train, {len(test_dataset)} test samples")
 
 batch_size = params["batch_size"]
@@ -306,26 +306,31 @@ for epoch in pbar:
     # Print progress
     pbar.set_postfix({'Train': avg_train_loss, 'Test': avg_test_loss})
       
-    # Save best model (rank 0 only)
-    if ddp:
-        dist.barrier()
-    if is_main and avg_test_loss < best_loss:
+    # Save best model (rank 0 only) + early stopping (all ranks)
+    if avg_test_loss < best_loss:
         best_loss = avg_test_loss
         best_loss_epoch = epoch
         patience_counter = 0
-        save_checkpoint(params["model_path"], {'model': raw_model, 'optimizer': optimizer}, {
-            'epoch': epoch,
-            'train_loss': avg_train_loss,
-            'test_loss': avg_test_loss,
-            'train_losses': train_losses,
-            'test_losses': test_losses,
-        })
-        print(f"\u2713 Saved best model with test loss: {best_loss:.4f}")
+        if ddp:
+            dist.barrier()
+        if is_main:
+            save_checkpoint(params["model_path"], {'model': raw_model, 'optimizer': optimizer}, {
+                'epoch': epoch,
+                'train_loss': avg_train_loss,
+                'test_loss': avg_test_loss,
+                'train_losses': train_losses,
+                'test_losses': test_losses,
+            })
+            print(f"\u2713 Saved best model with test loss: {best_loss:.4f}")
     else:
         patience_counter += 1
-        if patience_counter >= patience:
+        if ddp:
+            dist.barrier()
+
+    if patience_counter >= patience:
+        if is_main:
             print(f"Early stopping at epoch {epoch} (no improvement for {patience} epochs)")
-            break
+        break
 
 
 if is_main:

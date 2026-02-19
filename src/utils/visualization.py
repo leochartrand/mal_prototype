@@ -73,7 +73,7 @@ def visualize_flowdit_samples(
     if decode_fn is not None:
         xg_recon = decode_fn(z_generated / scale_factor)
 
-        fig, axes = plt.subplots(3, n_vis, figsize=(n_vis * 2, 6))
+        fig, axes = plt.subplots(3, n_vis, figsize=(n_vis * 2, 6), squeeze=False)
         row_labels = ['Initial', 'Target', 'Generated']
 
         for i in range(n_vis):
@@ -82,20 +82,21 @@ def visualize_flowdit_samples(
                             fontsize=8, fontweight='bold', ha='center', va='bottom')
 
             axes[0, i].imshow(_to_hwc(x0_vis[i])); axes[0, i].axis('off')
-            if i == 0: axes[0, 0].set_ylabel(row_labels[0], fontsize=9)
-
             axes[1, i].imshow(_to_hwc(xt_vis[i])); axes[1, i].axis('off')
-            if i == 0: axes[1, 0].set_ylabel(row_labels[1], fontsize=9)
 
             img = xg_recon[i].cpu().permute(1, 2, 0).numpy()
             axes[2, i].imshow(np.clip(img, 0, 1)); axes[2, i].axis('off')
-            if i == 0: axes[2, 0].set_ylabel(row_labels[2], fontsize=9)
+
+        # Add row labels on left side (using text instead of ylabel to avoid axis('off') hiding them)
+        for row_idx, label in enumerate(row_labels):
+            axes[row_idx, 0].text(-0.1, 0.5, label, transform=axes[row_idx, 0].transAxes,
+                                   fontsize=9, fontweight='bold', ha='right', va='center', rotation=90)
     else:
         cos_sims = F.cosine_similarity(
             z_generated.flatten(1), z_target_gt.flatten(1), dim=1
         )
 
-        fig, axes = plt.subplots(2, n_vis, figsize=(n_vis * 2, 4))
+        fig, axes = plt.subplots(2, n_vis, figsize=(n_vis * 2, 4), squeeze=False)
 
         for i in range(n_vis):
             wrapped_text = '\n'.join(textwrap.wrap(text_txt_vis[i], width=25))

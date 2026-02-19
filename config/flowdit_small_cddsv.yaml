@@ -1,21 +1,21 @@
-# Configuration for AffordanceFlowDiT training
+# Configuration for FlowDiT training
 # Flow matching DiT for affordance prediction
 
 dataset_path: "../../../mnt/sda1/Datasets/chal2525/mmap_data/"
-model_path: "models/flowdit_small_cdiv/model.pt"
-results_path: "results/flowdit_small_cdiv/"
+model_path: "models/flowdit_small_cddsv/model.pt"
+results_path: "results/flowdit_small_cddsv/"
 
 # Encoder model names (must match filenames in dataset_path)
-vision_model: "theia_small_cdiv"
+vision_model: "theia_small_cddsv"
 text_model: "clip-vit-large-patch14"
 
 # Theia encoder (frozen, for encoding images to latents)
 theia:
-  model_path: "./models/theia_small_cdiv"
+  model_path: "./models/theia_small_cddsv"
 
 # Theia decoder (optional, for visualization)
 theia_decoder:
-  model_path: "models/theia_decoder/small_cdiv/model.pt"
+  model_path: "models/theia_small_cddsv_dec/model.pt"
   model_params:
     ch_mult: [1, 1, 2, 2, 4]
     channels: 64
@@ -26,7 +26,7 @@ theia_decoder:
 # Model architecture
 model_params:
   latent_dim: 384        # Theia-small output dimension
-  num_patches: 196       # 14x14 patches from Theia
+  num_patches: 196       # 14x14 patches from Theia (will be 392 after concat with init)
   hidden_dim: 512        # Transformer hidden dimension
   depth: 8               # Number of transformer blocks
   num_heads: 8           # Number of attention heads (must divide 392 evenly)
@@ -37,7 +37,7 @@ model_params:
   cfg_drop_both: 0.05     # P(drop both text and context) for classifier-free guidance
 
 # Scale factor for Theia latents (computed from data: 1/std)
-scale_factor: 1.683076
+scale_factor: 1.68355
 
 # Training
 batch_size: 32
@@ -55,6 +55,7 @@ use_ema: true
 gradient_checkpointing: false
 
 # Sampling/visualization
+vis_every: 5           # Visualize every N epochs
 sample_steps: 50       # Euler steps for sampling
 cfg_scale: 1.0         # Single-scale CFG weight (legacy, used when two-scale is disabled)
 context_cfg_scale: 2.5 # Two-scale CFG: context weight (spatial fidelity to scene)
@@ -62,15 +63,3 @@ prompt_cfg_scale: 7.5  # Two-scale CFG: prompt weight (instruction following str
 
 # Checkpoint
 resume_from_checkpoint: true
-
-# Phase 2: Adversarial fine-tuning
-adversarial:
-  start_epoch: 3          # Adversarial training activates at this epoch (set -1 to disable)
-  lambda_adv: 0.05         # Weight of adversarial loss relative to flow loss
-  ramp_start_epoch: 2      # Epochs after start_epoch before lambda ramp begins (disc warmup)
-  ramp_end_epoch: 10       # Epochs after start_epoch when lambda reaches full value
-  euler_steps: 4           # Fixed Euler steps for generation during training
-  disc_lr: 2.0e-4          # Discriminator learning rate (separate optimizer)
-  disc_channels: [256, 512]
-  loss_type: 'bce'         # 'bce' or 'hinge'
-  cfg_scale_train: 1.0     # CFG scale during adversarial generation (1.0 = no CFG)

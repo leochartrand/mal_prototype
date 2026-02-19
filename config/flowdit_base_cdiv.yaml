@@ -1,0 +1,64 @@
+# Configuration for FlowDiT training
+# Flow matching DiT for affordance prediction
+
+dataset_path: "../../../mnt/sda1/Datasets/chal2525/mmap_data/"
+model_path: "models/flowdit_base_cdiv/model.pt"
+results_path: "results/flowdit_base_cdiv/"
+
+# Encoder model names (must match filenames in dataset_path)
+vision_model: "theia_base_cdiv"
+text_model: "clip-vit-large-patch14"
+
+# Theia encoder (frozen, for encoding images to latents)
+theia:
+  model_path: "./models/theia_base_cdiv"
+
+# Theia decoder (optional, for visualization)
+theia_decoder:
+  model_path: "models/theia_base_cdiv_dec/model.pt"
+  model_params:
+    ch_mult: [1, 1, 2, 2, 4]
+    channels: 64
+    z_channels: 128
+    dropout: 0.0
+    theia_dim: 768
+
+# Model architecture
+model_params:
+  latent_dim: 768        # Theia-base output dimension
+  num_patches: 196       # 14x14 patches from Theia
+  hidden_dim: 512        # Transformer hidden dimension
+  depth: 8               # Number of transformer blocks
+  num_heads: 8           # Number of attention heads (must divide 392 evenly)
+  mlp_ratio: 4.0         # MLP hidden dim = hidden_dim * mlp_ratio
+  dropout: 0.0           # Dropout rate
+  cfg_drop_prompt: 0.05   # P(drop text only) for classifier-free guidance
+  cfg_drop_context: 0.05  # P(drop context/z_init only) for classifier-free guidance
+  cfg_drop_both: 0.05     # P(drop both text and context) for classifier-free guidance
+
+# Scale factor for Theia latents (computed from data: 1/std)
+scale_factor: 1.68355
+
+# Training
+batch_size: 64
+num_epochs: 50
+patience: 5
+lr: 1e-4
+min_lr: 1e-6
+weight_decay: 0.0
+grad_clip: 1.0
+
+# EMA (Exponential Moving Average)
+use_ema: true
+
+# Gradient checkpointing (for memory efficiency)
+gradient_checkpointing: false
+
+# Sampling/visualization
+sample_steps: 50       # Euler steps for sampling
+cfg_scale: 1.0         # Single-scale CFG weight (legacy, used when two-scale is disabled)
+context_cfg_scale: 2.5 # Two-scale CFG: context weight (spatial fidelity to scene)
+prompt_cfg_scale: 7.5  # Two-scale CFG: prompt weight (instruction following strength)
+
+# Checkpoint
+resume_from_checkpoint: true

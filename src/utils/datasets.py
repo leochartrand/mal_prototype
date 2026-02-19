@@ -198,20 +198,31 @@ class MemoryMappedDataset(Dataset):
 class DecoderMemoryMappedDataset(Dataset):
     """Memory-mapped dataset for decoder training (image reconstruction).
     
-    Loads combined initial+target data from mmap_dec/ directory.
-    Each trajectory contributes 2 samples (initial + target frame).
+    Reads directly from the existing initial_*/target_* mmap files,
+    treating each trajectory as 2 samples (initial frame + target frame).
+    No separate decoder data directory needed — saves ~50% disk space.
     
-    Directory structure expected:
-        decoder_224.npy                          : float32 [N, 3, 224, 224] (CHW, [0,1])
-        decoder_embed_{vision_model}.npy         : float32 [N, num_patches, D]
-        decoder_train_indices.npy                : int32   [N_train]
-        decoder_test_indices.npy                 : int32   [N_test]
+    Directory structure expected (same as MemoryMappedDataset):
+        initial_224.npy                          : float32 [N, 3, 224, 224] (CHW, [0,1])
+        target_224.npy                           : float32 [N, 3, 224, 224] (CHW, [0,1])
+        initial_embed_{vision_model}.npy         : float32 [N, num_patches, D]
+        target_embed_{vision_model}.npy          : float32 [N, num_patches, D]
+        train_indices.npy                        : int32   [N_train]
+        test_indices.npy                         : int32   [N_test]
+    
+    Indexing scheme:
+        For N trajectories in a split, the dataset has 2*N samples.
+        Sample i maps to:
+          - trajectory split_indices[i // 2]
+          - initial if i % 2 == 0, target if i % 2 == 1
+        The DataLoader's shuffle handles randomization.
     
     Args:
-        data_path: Path to directory containing .npy files
+        data_path: Path to mmap_data/ directory containing .npy files
         vision_model: Name of the vision encoder (e.g. 'theia_small_cdiv')
         split: Either 'train' or 'test' to load split indices
-        indices: Optional explicit indices (overrides split)
+        indices: Optional explicit trajectory indices (overrides split).
+                 These index into the mmap arrays directly (not doubled).
     """
     def __init__(
         self,
@@ -223,25 +234,28 @@ class DecoderMemoryMappedDataset(Dataset):
         self.data_path = data_path
         self.vision_model = vision_model
         
-        # Memory-mapped arrays (read-only)
-        self.images = np.load(f"{data_path}/decoder_224.npy", mmap_mode='r')
-        self.embeds = np.load(f"{data_path}/decoder_embed_{vision_model}.npy", mmap_mode='r')
+        # Memory-mapped arrays (read-only, shared with MemoryMappedDataset)
+        self.initial_224 = np.load(f"{data_path}/initial_224.npy", mmap_mode='r')
+        self.target_224 = np.load(f"{data_path}/target_224.npy", mmap_mode='r')
+        self.initial_embed = np.load(f"{data_path}/initial_embed_{vision_model}.npy", mmap_mode='r')
+        self.target_embed = np.load(f"{data_path}/target_embed_{vision_model}.npy", mmap_mode='r')
         
-        # Determine indices: explicit > split file > all
+        # Determine trajectory indices for this split
         if indices is not None:
-            self.indices = indices
+            self.traj_indices = indices
         elif split is not None:
             if split not in ('train', 'test'):
                 raise ValueError(f"split must be 'train' or 'test', got '{split}'")
-            split_file = f"{data_path}/decoder_{split}_indices.npy"
+            split_file = f"{data_path}/{split}_indices.npy"
             if not os.path.exists(split_file):
                 raise FileNotFoundError(f"Split file not found: {split_file}")
-            self.indices = np.load(split_file)
+            self.traj_indices = np.load(split_file)
         else:
-            self.indices = np.arange(len(self.embeds))
+            self.traj_indices = np.arange(len(self.initial_embed))
     
     def __len__(self):
-        return len(self.indices)
+        # Each trajectory contributes 2 samples (initial + target)
+        return len(self.traj_indices) * 2
     
     def __getitem__(self, idx):
         """Returns (embed, image).
@@ -249,12 +263,18 @@ class DecoderMemoryMappedDataset(Dataset):
         - embed: tensor float32 [num_patches, latent_dim]
         - image: tensor float32 [3, 224, 224] in [0, 1]
         """
-        actual_idx = self.indices[idx]
+        traj_pos = idx // 2
+        is_target = idx % 2
+        actual_idx = self.traj_indices[traj_pos]
         
-        embed = torch.from_numpy(self.embeds[actual_idx].copy())
-        image = torch.from_numpy(self.images[actual_idx].copy())
+        if is_target:
+            embed = self.target_embed[actual_idx]
+            image = self.target_224[actual_idx]
+        else:
+            embed = self.initial_embed[actual_idx]
+            image = self.initial_224[actual_idx]
         
-        return embed, image
+        return torch.from_numpy(embed.copy()), torch.from_numpy(image.copy())
 
 
 def mmap_collate_fn(batch):
