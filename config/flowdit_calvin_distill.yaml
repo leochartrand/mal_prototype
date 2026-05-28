@@ -1,0 +1,51 @@
+# Guidance distillation of the subgoal-RAE FlowDiT teacher.
+# Student learns the two-scale CFG-guided velocity (w_ctx=1.25, w_prompt=3.0)
+# in a single forward pass. At inference: sample with cfg_scale=1.0 (1 fwd / step).
+# CFG params chosen from response-surface analysis (poly + GP) over 36 grid cells:
+# GP argmax (1.10, 2.90); (1.25, 3.0) sits in the interior of the plateau.
+
+teacher_path: "models/calvin_ft_subgoal_rae/model.pt"
+save_dir: "models/calvin_ft_subgoal_rae_distill"
+results_path: "results/calvin_ft_subgoal_rae_distill"
+
+dataset_path: "/mnt/sda1/Datasets/chal2525/mmap_data_abcd_subgoal/"
+vision_model: "theia_small_cdiv"
+text_model: "all-MiniLM-L6-v2"
+
+cfg_ctx: 1.25
+cfg_prompt: 3.0
+scale_factor: 1.798522
+timestep_distribution: "rae_shift"
+eps: 1.0e-5
+
+theia_decoder:
+  model_path: "models/theia_decoder/small_cdiv/model.pt"
+  model_params:
+    ch_mult: [1, 1, 2, 2, 4]
+    channels: 64
+    z_channels: 128
+    dropout: 0.0
+    theia_dim: 384
+
+model_params:
+  model_type: "dit_air"
+  latent_dim: 384
+  num_patches: 196
+  hidden_dim: 896
+  depth: 18
+  num_heads: 14
+  mlp_ratio: 4.0
+  dropout: 0.0
+  use_pooled_text: true
+
+batch_size: 16
+num_epochs: 10
+lr: 5.0e-5
+weight_decay: 0.0
+warmup_steps: 500
+grad_clip: 1.0
+num_workers: 6
+patience: 100
+
+sample_steps: 4
+ema_decay: 0.9999

@@ -1,0 +1,52 @@
+# CALVIN ABC→D fine-tuning — based on flowdit.yaml, only changed fields marked with (*)
+
+dataset_path: "/mnt/sda1/Datasets/chal2525/mmap_data_abcd/"  # (*)
+model_path: "models/calvin_ft_endgoal_rae/model.pt"                       # (*)
+results_path: "results/calvin_ft_endgoal_rae/"                            # (*)
+
+pretrained_flowdit_path: "models/flowdit_droid_endgoal/model.pt"            # (*)
+
+vision_model: "theia_small_cdiv"
+text_model: "all-MiniLM-L6-v2"
+
+theia_decoder:
+  model_path: "models/theia_decoder/small_cdiv/model.pt"
+  model_params:
+    ch_mult: [1, 1, 2, 2, 4]
+    channels: 64
+    z_channels: 128
+    dropout: 0.0
+    theia_dim: 384
+
+model_params:
+  model_type: "dit_air"  # (*)
+  latent_dim: 384
+  num_patches: 196
+  hidden_dim: 896
+  depth: 18
+  num_heads: 14
+  mlp_ratio: 4.0
+  dropout: 0.1              # same as DROID
+  use_pooled_text: true
+  cfg_drop_prompt: 0.05
+  cfg_drop_context: 0.05
+  cfg_drop_both: 0.05
+
+scale_factor: 1.798522
+timestep_distribution: "rae_shift"
+
+batch_size: 24
+num_epochs: 30              # (*)
+patience: 8                 # (*)
+lr: 3e-5                    # (*) lower for fine-tuning
+weight_decay: 0.0           # same as DROID
+grad_clip: 1.0
+warmup_steps: 200           # (*) shorter, smaller dataset
+
+use_ema: false
+gradient_checkpointing: false
+resume_from_checkpoint: true
+
+sample_steps: 4
+cfg_ctx: 2.5
+cfg_prompt: 6.0

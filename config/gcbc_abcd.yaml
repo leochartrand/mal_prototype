@@ -1,0 +1,31 @@
+# GCBC (Goal-Conditioned Behavioral Cloning) — ABC→D split
+# Flow Matching MLP Policy with Theia features
+
+# Data
+data_dir: "/mnt/sda1/Datasets/chal2525/gcbc_data_abcd"
+
+# Save
+save_dir: "models/gcbc_abcd"
+
+# Action prediction
+act_pred_horizon: 5
+k_min: 8
+k_max: 20
+
+# Training
+batch_size: 256
+lr: 3.0e-4
+warmup_steps: 2000
+total_steps: 400000     # matches the OLD working run (102M samples)
+log_interval: 100
+save_interval: 50000
+eval_interval: 50000
+num_workers: 8
+
+num_sampling_steps: 4
+hidden_dim: 256
+num_blocks: 3
+dropout: 0.1
+
+# EMA
+ema_decay: 0.9999

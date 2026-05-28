@@ -1,0 +1,9 @@
+data/
+/models/
+results/
+logs/
+__pycache__/
+refs/
+.venv
+data
+repos/
